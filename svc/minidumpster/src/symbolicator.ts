@@ -107,12 +107,6 @@ async function submitAndPoll(
         body = await poll.json() as SymbolicatorResponse;
     }
 
-    if (body.status !== 'completed') {
-        throw new Error(
-            `symbolication ${body.status}: ${body.message ?? 'no details'}`,
-        );
-    }
-
     return body;
 }
 

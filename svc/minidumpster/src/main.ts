@@ -20,8 +20,8 @@ if (import.meta.main) {
     const db = new Db(Paths.dbPath(config.dataDir));
     const app = App.buildApp({ config, db });
 
-    const worker = Worker.startWorker({ db, config });
     const stopRetention = Retention.startRetentionJob(db, config);
+    const worker = Worker.startWorker({ db, config });
 
     const server = Deno.serve({ port: config.port }, app.fetch);
     const artifactCrawler = ArtifactCrawler.startArtifactCrawler({

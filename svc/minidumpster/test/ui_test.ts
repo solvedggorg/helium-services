@@ -79,6 +79,16 @@ Deno.test('groupsPage renders populated rows', () => {
     assert(html.includes('<span class="pill">macOS</span>'));
     assert(html.includes('missing symbols'));
     assert(html.includes('jj'));
+    assert(
+        html.includes(
+            '<link rel="icon" type="image/svg+xml" href="/favicon.svg">',
+        ),
+    );
+    assert(
+        html.includes(
+            '<a class="brand" href="/" aria-label="minidumpster"><img src="/favicon.svg" alt=""></a>',
+        ),
+    );
 });
 
 Deno.test('symbolsPage renders release and installed bundle state', () => {

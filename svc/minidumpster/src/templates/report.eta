@@ -25,15 +25,14 @@
 </p>
 
 <p>
-  <% if (it.report.dump_deleted) { %>
-  <span class="muted">raw payload deleted by retention</span>
-  <% } else { %>
   <a href="/reports/<%= it.report.id %>/dump">Download raw <%= it.report.kind === 'apple' ? 'crash report' : '.dmp' %></a>
-  <% } %>
   <% if (it.report.status === 'processed') { %>
   · <a href="/reports/<%= it.report.id %>/json">Download processed JSON</a>
   <% } %>
 </p>
+
+<h2>Retention</h2>
+<p class="muted">This report will be automatically deleted at <%= it.fmtTime(it.retentionDeadline) %>.</p>
 
 <h2>Annotations</h2>
 <div class="overflow">

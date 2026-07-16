@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { serveStatic } from 'hono/deno';
 
 import * as ui from '../ui.ts';
@@ -7,6 +7,7 @@ import { requireSession } from './auth.ts';
 import type { GroupFilter } from '../db.ts';
 import type { AppDeps, Env } from '../app.ts';
 import type { SymbolicatorResponse } from '../signature.ts';
+import { insertReportForStoredDump } from '../reports.ts';
 import {
     dumpPath,
     processedPath,
@@ -18,6 +19,14 @@ import {
     parseAppleCrashMeta,
 } from '../applecrash.ts';
 
+const disablePrivateResponseCaching: MiddlewareHandler<Env> = async (
+    c,
+    next,
+) => {
+    await next();
+    c.header('cache-control', 'private, no-store');
+};
+
 async function readProcessed(
     dataDir: string,
     reportId: string,
@@ -27,7 +36,7 @@ async function readProcessed(
             await Deno.readTextFile(processedPath(dataDir, reportId)),
         ) as SymbolicatorResponse;
     } catch (err) {
-        logEvent('failed_parsing_processed', { dataDir, reportId, err });
+        logError('failed_parsing_processed', err, { dataDir, reportId });
         return null;
     }
 }
@@ -68,6 +77,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     app.get('/app.js', serveStatic({ path: './src/static/app.js' }));
 
     app.use('*', requireSession(config));
+    app.use('*', disablePrivateResponseCaching);
 
     app.get('/', (c) => {
         const filter: GroupFilter = {
@@ -123,7 +133,6 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
 
     app.post('/upload', async (c) => {
         const login = c.get('session').login;
-
         let form: FormData;
         try {
             form = await c.req.raw.formData();
@@ -146,6 +155,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             text = pasted;
         }
         text = text.trim();
+        const encoded = new TextEncoder().encode(text);
 
         if (text === '') {
             return c.html(
@@ -153,7 +163,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                 400,
             );
         }
-        if (text.length > config.maxDumpSizeBytes) {
+        if (encoded.byteLength > config.maxDumpSizeBytes) {
             return c.html(ui.uploadPage(login, 'Report too large.'), 413);
         }
         if (!looksLikeAppleCrashReport(text)) {
@@ -168,21 +178,12 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         }
 
         const meta = parseAppleCrashMeta(text);
-        if (meta.incidentId) {
-            const existing = db.findReportByGuid(meta.incidentId);
-            if (existing) {
-                if (existing.status === 'failed') {
-                    db.markRetry(existing.id, 'requeued by re-upload', 0, 0);
-                }
-                return c.redirect(`/reports/${existing.id}`);
-            }
+        const existing = meta.incidentId
+            ? db.findReportByGuid(meta.incidentId)
+            : null;
+        if (existing) {
+            return c.redirect(`/reports/${existing.id}`);
         }
-
-        const id = crypto.randomUUID();
-        await writeFileWithDirs(
-            dumpPath(config.dataDir, id),
-            new TextEncoder().encode(text),
-        );
 
         const annotations: Record<string, string> = {
             source: 'manual-apple-crash-report',
@@ -192,7 +193,9 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         if (meta.osVersion) annotations['os_version'] = meta.osVersion;
         if (meta.hardwareModel) annotations['hw_model'] = meta.hardwareModel;
 
-        db.insertReport({
+        const id = crypto.randomUUID();
+        await writeFileWithDirs(dumpPath(config.dataDir, id), encoded);
+        insertReportForStoredDump(db, config, {
             id,
             kind: 'apple',
             product: meta.process,
@@ -207,10 +210,8 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         logEvent('report_received', {
             report_id: id,
             kind: 'apple',
-            product: meta.process,
-            version: meta.version,
             uploaded_by: login,
-            bytes: text.length,
+            bytes: encoded.byteLength,
         });
 
         return c.redirect(`/reports/${id}`);
@@ -261,13 +262,19 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         }
 
         return c.html(
-            ui.reportPage(report, group, stack, c.get('session').login),
+            ui.reportPage(
+                report,
+                group,
+                stack,
+                report.received_at + config.retentionDays * 86_400_000,
+                c.get('session').login,
+            ),
         );
     });
 
     app.get('/reports/:id/dump', async (c) => {
         const report = db.getReport(c.req.param('id'));
-        if (!report || report.dump_deleted) {
+        if (!report) {
             return c.text('not found\n', 404);
         }
 
@@ -292,7 +299,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
 
     app.get('/reports/:id/json', async (c) => {
         const report = db.getReport(c.req.param('id'));
-        if (!report) {
+        if (!report || report.status !== 'processed') {
             return c.text('not found\n', 404);
         }
 

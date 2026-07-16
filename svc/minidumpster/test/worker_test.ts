@@ -1,8 +1,13 @@
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertRejects } from '@std/assert';
 
-import { processReport } from '../src/worker.ts';
+import { processReport, startWorker } from '../src/worker.ts';
 import { runRetention, runSymbolRetention } from '../src/retention.ts';
-import { fixtureResponse, makeTestEnv, type TestEnv } from './helpers.ts';
+import {
+    fixtureResponse,
+    makeTestEnv,
+    minimalMinidump,
+    type TestEnv,
+} from './helpers.ts';
 import { dumpPath, processedPath, writeFileWithDirs } from '../src/paths.ts';
 
 async function insertPendingReport(
@@ -12,7 +17,7 @@ async function insertPendingReport(
 ): Promise<void> {
     await writeFileWithDirs(
         dumpPath(env.dir, id),
-        new Uint8Array([0x4d, 0x44, 0x4d, 0x50, 1, 2, 3]),
+        minimalMinidump(),
     );
     env.db.insertReport({
         id,
@@ -26,54 +31,72 @@ async function insertPendingReport(
     });
 }
 
+async function assertFilesDoNotExist(...paths: string[]): Promise<void> {
+    for (const path of paths) {
+        await assertRejects(() => Deno.stat(path), Deno.errors.NotFound);
+    }
+}
+
+async function assertPayloadDiscarded(
+    env: TestEnv,
+    id: string,
+): Promise<void> {
+    assertEquals(env.db.getReport(id), null);
+    await assertFilesDoNotExist(
+        dumpPath(env.dir, id),
+        processedPath(env.dir, id),
+    );
+}
+
 /** Mock Symbolicator implementing the pending/poll protocol. */
 function mockSymbolicator(fixture: string, pendingPolls: number) {
     let polls = 0;
-    const server = Deno.serve({ port: 0, onListen: () => {} }, (req) => {
-        const url = new URL(req.url);
-        if (req.method === 'POST' && url.pathname === '/minidump') {
-            return Response.json({
+    const fetchFn = ((input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (init?.method === 'POST' && url.pathname === '/minidump') {
+            return Promise.resolve(Response.json({
                 status: 'pending',
                 request_id: 'req-1',
                 retry_after: 0,
-            });
+            }));
         }
-        if (req.method === 'GET' && url.pathname === '/requests/req-1') {
+        if (url.pathname === '/requests/req-1') {
             polls++;
             if (polls <= pendingPolls) {
-                return Response.json({
+                return Promise.resolve(Response.json({
                     status: 'pending',
                     request_id: 'req-1',
                     retry_after: 0,
-                });
+                }));
             }
-            return new Response(fixture, {
-                headers: { 'content-type': 'application/json' },
-            });
+            return Promise.resolve(
+                new Response(fixture, {
+                    headers: { 'content-type': 'application/json' },
+                }),
+            );
         }
-        return new Response('not found', { status: 404 });
-    });
-    const addr = server.addr;
+        return Promise.resolve(new Response('not found', { status: 404 }));
+    }) as typeof fetch;
     return {
-        url: `http://127.0.0.1:${addr.port}`,
+        fetchFn,
         polls: () => polls,
-        shutdown: () => server.shutdown(),
     };
 }
 
 Deno.test('worker follows the pending/poll protocol and groups the report', async () => {
     const fixture = await fixtureResponse();
     const mock = mockSymbolicator(fixture, 2);
-    const env = await makeTestEnv({ symbolicatorUrl: mock.url });
+    const env = await makeTestEnv();
     try {
         await insertPendingReport(env, crypto.randomUUID());
-        const [claimed] = env.db.claimPending(1, Date.now());
+        const claimed = env.db.claimNext(Date.now());
         assert(claimed);
         assertEquals(env.db.getReport(claimed.id)!.status, 'processing');
 
         await processReport({
             db: env.db,
             config: env.config,
+            fetchFn: mock.fetchFn,
             pollIntervalMs: 5,
         }, claimed);
 
@@ -83,6 +106,8 @@ Deno.test('worker follows the pending/poll protocol and groups the report', asyn
         );
         const row = env.db.getReport(claimed.id)!;
         assertEquals(row.status, 'processed');
+        assertEquals(row.attempts, 1);
+        assertEquals(row.next_attempt_at, 0);
         assertEquals(row.platform, 'Windows');
         assert(row.group_id != null);
 
@@ -98,7 +123,100 @@ Deno.test('worker follows the pending/poll protocol and groups the report', asyn
         );
         assertEquals(processed.status, 'completed');
     } finally {
-        await mock.shutdown();
+        await env.cleanup();
+    }
+});
+
+Deno.test('worker shutdown wakes idle polling and aborts symbolication', async () => {
+    const env = await makeTestEnv({ workerPollMs: 60_000 });
+    try {
+        const idle = startWorker({ db: env.db, config: env.config });
+        const idleStarted = performance.now();
+        await idle.stop();
+        assert(performance.now() - idleStarted < 1000);
+
+        const id = crypto.randomUUID();
+        await insertPendingReport(env, id);
+        const { promise: started, resolve: notifyStarted } = Promise
+            .withResolvers<void>();
+        let requests = 0;
+        const fetchFn =
+            ((_input: string | URL | Request, init?: RequestInit) => {
+                requests++;
+                notifyStarted();
+                return new Promise<Response>((_resolve, reject) => {
+                    const signal = init?.signal;
+                    if (signal?.aborted) {
+                        reject(signal.reason);
+                        return;
+                    }
+                    signal?.addEventListener(
+                        'abort',
+                        () => reject(signal.reason),
+                        { once: true },
+                    );
+                });
+            }) as typeof fetch;
+        const abort = new AbortController();
+        const active = startWorker({
+            db: env.db,
+            config: env.config,
+            fetchFn,
+            signal: abort.signal,
+        });
+        await started;
+        const activeStarted = performance.now();
+        abort.abort();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assertEquals(requests, 1);
+        await active.stop();
+        assert(performance.now() - activeStarted < 1000);
+        const row = env.db.getReport(id)!;
+        assertEquals(row.status, 'pending');
+        assertEquals(row.attempts, 0);
+        assertEquals(row.next_attempt_at, 0);
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('worker survives a secondary report-state write failure', async () => {
+    const completed = await fixtureResponse();
+    let requests = 0;
+    const fetchFn = (() =>
+        Promise.resolve(
+            requests++ === 0
+                ? new Response('temporary failure', { status: 500 })
+                : new Response(completed, {
+                    headers: { 'content-type': 'application/json' },
+                }),
+        )) as typeof fetch;
+    const env = await makeTestEnv({ workerPollMs: 5 });
+    try {
+        const id = crypto.randomUUID();
+        await insertPendingReport(env, id);
+        const markRetry = env.db.markRetry.bind(env.db);
+        let failOnce = true;
+        env.db.markRetry = (...args) => {
+            if (failOnce) {
+                failOnce = false;
+                throw new Error('simulated state write failure');
+            }
+            markRetry(...args);
+        };
+
+        const worker = startWorker({ db: env.db, config: env.config, fetchFn });
+        const deadline = Date.now() + 1000;
+        while (
+            env.db.getReport(id)?.status !== 'processed'
+            && Date.now() < deadline
+        ) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        await worker.stop();
+        assertEquals(env.db.getReport(id)?.status, 'processed');
+        assertEquals(requests, 2);
+    } finally {
         await env.cleanup();
     }
 });
@@ -106,16 +224,19 @@ Deno.test('worker follows the pending/poll protocol and groups the report', asyn
 Deno.test('two crashes with the same stack land in the same group', async () => {
     const fixture = await fixtureResponse();
     const mock = mockSymbolicator(fixture, 0);
-    const env = await makeTestEnv({ symbolicatorUrl: mock.url });
+    const env = await makeTestEnv();
     try {
         await insertPendingReport(env, crypto.randomUUID());
         await insertPendingReport(env, crypto.randomUUID());
-        const claimed = env.db.claimPending(10, Date.now());
-        assertEquals(claimed.length, 2);
+        const claimed = [
+            env.db.claimNext(Date.now())!,
+            env.db.claimNext(Date.now())!,
+        ];
         for (const r of claimed) {
             await processReport({
                 db: env.db,
                 config: env.config,
+                fetchFn: mock.fetchFn,
                 pollIntervalMs: 5,
             }, r);
         }
@@ -124,31 +245,41 @@ Deno.test('two crashes with the same stack land in the same group', async () => 
         assertEquals(a.group_id, b.group_id);
         assertEquals(env.db.getGroup(a.group_id!)!.report_count, 2);
     } finally {
-        await mock.shutdown();
         await env.cleanup();
     }
 });
 
-Deno.test('worker retries with backoff, then marks the report failed', async () => {
-    const server = Deno.serve(
-        { port: 0, onListen: () => {} },
-        () => new Response('boom', { status: 500 }),
-    );
-    const addr = server.addr;
+Deno.test('worker retries with backoff, then discards terminal failures', async () => {
+    const fetchFn = (() =>
+        Promise.resolve(
+            new Response('boom', { status: 500 }),
+        )) as typeof fetch;
     const env = await makeTestEnv({
-        symbolicatorUrl: `http://127.0.0.1:${addr.port}`,
         maxAttempts: 2,
     });
     try {
-        await insertPendingReport(env, crypto.randomUUID());
-        const [first] = env.db.claimPending(1, Date.now());
+        const id = crypto.randomUUID();
+        await insertPendingReport(env, id);
+        const group = env.db.upsertGroup(
+            'terminal-failure',
+            'terminal',
+            Date.now(),
+        );
+        env.db.markProcessed(id, group, 'Windows', Date.now(), false, 1);
+        env.db.recountGroups([group]);
+        assertEquals(
+            env.db.requeueUnsymbolicated('MyBrowser', '138.0.1.0', 0),
+            1,
+        );
+        const first = env.db.claimNext(Date.now())!;
         await processReport({
             db: env.db,
             config: env.config,
+            fetchFn,
             pollIntervalMs: 5,
         }, first);
 
-        let row = env.db.getReport(first.id)!;
+        const row = env.db.getReport(first.id)!;
         assertEquals(row.status, 'pending');
         assertEquals(row.attempts, 1);
         assert(row.error && row.error.includes('500'));
@@ -157,52 +288,151 @@ Deno.test('worker retries with backoff, then marks the report failed', async () 
             'retry should be scheduled in the future',
         );
         assertEquals(
-            env.db.claimPending(1, Date.now()).length,
-            0,
+            env.db.claimNext(Date.now()),
+            null,
             'not claimable before backoff elapses',
         );
 
-        const [second] = env.db.claimPending(1, row.next_attempt_at + 1);
+        const second = env.db.claimNext(row.next_attempt_at + 1);
         assert(second);
+        await writeFileWithDirs(
+            processedPath(env.dir, first.id),
+            '{"sensitive":"partial result"}',
+        );
         await processReport({
             db: env.db,
             config: env.config,
+            fetchFn,
             pollIntervalMs: 5,
         }, second);
-        row = env.db.getReport(first.id)!;
-        assertEquals(row.status, 'failed');
-        assertEquals(row.attempts, 2);
+        await assertPayloadDiscarded(env, first.id);
+        assertEquals(env.db.getGroup(group), null);
+        assertEquals(env.db.reportsPerDay(0), []);
     } finally {
-        await server.shutdown();
         await env.cleanup();
     }
 });
 
-Deno.test('retention deletes old dumps but keeps metadata', async () => {
+Deno.test('worker drops raw data rejected by Symbolicator parsing', async () => {
+    let requests = 0;
+    const fetchFn = (() => {
+        requests++;
+        return Promise.resolve(Response.json({
+            status: 'failed',
+            message: 'malformed minidump with sensitive details',
+        }));
+    }) as typeof fetch;
+    const env = await makeTestEnv({
+        maxAttempts: 5,
+    });
+    try {
+        const id = crypto.randomUUID();
+        await writeFileWithDirs(dumpPath(env.dir, id), new Uint8Array([1]));
+        await writeFileWithDirs(
+            processedPath(env.dir, id),
+            '{"sensitive":"old processing result"}',
+        );
+        env.db.insertReport({
+            id,
+            product: 'MyBrowser',
+            version: '1.0',
+            guid: 'sensitive-guid',
+            ptype: 'renderer',
+            channel: 'stable',
+            annotations: JSON.stringify({ uploaded_by: 'jj', secret: 'x' }),
+            received_at: Date.now(),
+        });
+        const group = env.db.upsertGroup(
+            'rejected',
+            'rejected',
+            Date.now(),
+        );
+        env.db.markProcessed(id, group, 'Windows', Date.now(), false, 1);
+        env.db.recountGroups([group]);
+        assertEquals(
+            env.db.requeueUnsymbolicated('MyBrowser', '1.0', 0),
+            1,
+        );
+        const claimed = env.db.claimNext(Date.now())!;
+        await processReport(
+            {
+                db: env.db,
+                config: env.config,
+                fetchFn,
+                pollIntervalMs: 5,
+            },
+            claimed,
+        );
+
+        await assertPayloadDiscarded(env, id);
+        assertEquals(env.db.getGroup(group), null);
+        assertEquals(env.db.reportsPerDay(0), []);
+        assertEquals(requests, 1);
+        assertEquals(env.db.claimNext(Number.MAX_SAFE_INTEGER), null);
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('retention deletes expired reports and all of their files', async () => {
     const env = await makeTestEnv({ retentionDays: 30 });
+    const now = Date.now();
+    const old = now - 31 * 24 * 60 * 60 * 1000;
     try {
         const oldId = crypto.randomUUID();
         const newId = crypto.randomUUID();
-        // The old report predates the retention window.
-        await insertPendingReport(
-            env,
-            oldId,
-            Date.now() - 31 * 24 * 60 * 60 * 1000,
-        );
+        await writeFileWithDirs(dumpPath(env.dir, oldId), 'sensitive dump');
+        await writeFileWithDirs(processedPath(env.dir, oldId), '{}');
+        env.db.insertReport({
+            id: oldId,
+            product: 'MyBrowser',
+            version: '1.0',
+            guid: 'sensitive-guid',
+            ptype: 'renderer',
+            channel: 'stable',
+            annotations: JSON.stringify({
+                uploaded_by: 'jj',
+                secret: 'annotation',
+            }),
+            received_at: old,
+        });
         await insertPendingReport(env, newId);
+        const group = env.db.upsertGroup('retention-test', 'retention', old);
+        env.db.markProcessed(oldId, group, 'Windows', old, true, 1);
 
-        const deleted = await runRetention(env.db, env.config);
-        assertEquals(deleted, 1);
-        assertEquals(env.db.getReport(oldId)!.dump_deleted, 1);
-        assertEquals(env.db.getReport(newId)!.dump_deleted, 0);
-        await Deno.stat(dumpPath(env.dir, newId)); // still there
-        let gone = false;
-        try {
-            await Deno.stat(dumpPath(env.dir, oldId));
-        } catch {
-            gone = true;
-        }
-        assert(gone, 'old dump file should be removed');
+        assertEquals(runRetention(env.db, env.config, now), 1);
+        assertEquals(env.db.getReport(oldId), null);
+        assertEquals(env.db.getGroup(group), null);
+        assert(env.db.getReport(newId));
+        await Deno.stat(dumpPath(env.dir, newId));
+        await assertFilesDoNotExist(
+            dumpPath(env.dir, oldId),
+            processedPath(env.dir, oldId),
+        );
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('retention skips active workers and deletes rows before files', async () => {
+    const env = await makeTestEnv({ retentionDays: 30 });
+    const now = Date.now();
+    const old = now - 31 * 24 * 60 * 60 * 1000;
+    try {
+        const id = crypto.randomUUID();
+        await insertPendingReport(env, id, old);
+        const claimed = env.db.claimNext(now)!;
+        assertEquals(claimed.id, id);
+        assertEquals(env.db.getReport(id)?.status, 'processing');
+
+        assertEquals(runRetention(env.db, env.config, now), 0);
+        assertEquals(env.db.getReport(id)?.status, 'processing');
+        await Deno.stat(dumpPath(env.dir, id));
+
+        env.db.markRetry(id, 'requeued after processing', 1, 0);
+        assertEquals(runRetention(env.db, env.config, now), 1);
+        assertEquals(env.db.getReport(id), null);
+        await assertFilesDoNotExist(dumpPath(env.dir, id));
     } finally {
         await env.cleanup();
     }
@@ -244,16 +474,13 @@ Deno.test('symbols upload requeues unsymbolicated reports, which then regroup', 
         }],
     });
     let withSymbols = false;
-    const server = Deno.serve(
-        { port: 0, onListen: () => {} },
-        () =>
+    const fetchFn = (() =>
+        Promise.resolve(
             new Response(withSymbols ? symbolicated : unsymbolicated, {
                 headers: { 'content-type': 'application/json' },
             }),
-    );
-    const env = await makeTestEnv({
-        symbolicatorUrl: `http://127.0.0.1:${server.addr.port}`,
-    });
+        )) as typeof fetch;
+    const env = await makeTestEnv();
     try {
         const id = crypto.randomUUID();
         await writeFileWithDirs(dumpPath(env.dir, id), new Uint8Array([1]));
@@ -267,14 +494,20 @@ Deno.test('symbols upload requeues unsymbolicated reports, which then regroup', 
             annotations: '{}',
             received_at: Date.now(),
         });
-        const [first] = env.db.claimPending(1, Date.now());
+        const first = env.db.claimNext(Date.now())!;
         await processReport(
-            { db: env.db, config: env.config, pollIntervalMs: 5 },
+            {
+                db: env.db,
+                config: env.config,
+                fetchFn,
+                pollIntervalMs: 5,
+            },
             first,
         );
         let row = env.db.getReport(id)!;
         assertEquals(row.status, 'processed');
         assertEquals(row.symbolicated, 0);
+        await Deno.stat(dumpPath(env.dir, id));
         const junkGroupId = row.group_id!;
 
         // Symbols arrive (product name cased differently, as CI would send).
@@ -285,16 +518,21 @@ Deno.test('symbols upload requeues unsymbolicated reports, which then regroup', 
         );
         assertEquals(env.db.getReport(id)!.status, 'pending');
         assertEquals(
-            env.db.claimPending(1, Date.now()).length,
-            0,
+            env.db.claimNext(Date.now()),
+            null,
             'not claimable before the negative-cache delay',
         );
 
         withSymbols = true;
-        const [second] = env.db.claimPending(1, notBefore + 1);
+        const second = env.db.claimNext(notBefore + 1);
         assert(second);
         await processReport(
-            { db: env.db, config: env.config, pollIntervalMs: 5 },
+            {
+                db: env.db,
+                config: env.config,
+                fetchFn,
+                pollIntervalMs: 5,
+            },
             second,
         );
         row = env.db.getReport(id)!;
@@ -317,7 +555,6 @@ Deno.test('symbols upload requeues unsymbolicated reports, which then regroup', 
             0,
         );
     } finally {
-        await server.shutdown();
         await env.cleanup();
     }
 });

@@ -264,6 +264,7 @@ export function reportPage(
     report: ReportRow,
     group: GroupRow | null,
     stack: string | null,
+    retentionDeadline: number,
     user?: string,
 ): string {
     const annotations = Object.entries(
@@ -277,10 +278,11 @@ export function reportPage(
         group,
         stack,
         annotations,
+        retentionDeadline,
     });
 }
 
-export function uploadPage(user?: string, error?: string): string {
+export function uploadPage(user: string, error?: string): string {
     return render('upload', {
         title: 'Upload crash report',
         section: 'upload',

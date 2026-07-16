@@ -3,34 +3,47 @@ import { join } from '@std/path';
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
 import { logError, logEvent } from './log.ts';
-import { dumpPath, symbolsDir } from './paths.ts';
+import { dumpPath, processedPath, symbolsDir } from './paths.ts';
 
-export async function runRetention(
+function removeIfExists(path: string): void {
+    try {
+        Deno.removeSync(path);
+    } catch (err) {
+        if (!(err instanceof Deno.errors.NotFound)) throw err;
+    }
+}
+
+const REPORT_STORES = [
+    ['raw', dumpPath],
+    ['processed', processedPath],
+] as const;
+
+export function runRetention(
     db: Db,
     config: Config,
     now: number = Date.now(),
-): Promise<number> {
+): number {
     const cutoff = now - config.retentionDays * 24 * 60 * 60 * 1000;
 
-    let deleted = 0;
-    for (const id of db.dumpsOlderThan(cutoff)) {
-        try {
-            await Deno.remove(dumpPath(config.dataDir, id));
-            deleted++;
-        } catch (err) {
-            if (!(err instanceof Deno.errors.NotFound)) {
-                logError('retention_delete_error', err, { report_id: id });
-                continue;
+    const expired = db.deleteExpiredReports(cutoff);
+    for (const id of expired) {
+        for (const [kind, path] of REPORT_STORES) {
+            try {
+                removeIfExists(path(config.dataDir, id));
+            } catch (err) {
+                logError('retention_file_delete_error', err, {
+                    report_id: id,
+                    kind,
+                });
             }
         }
-        db.markDumpDeleted(id);
     }
 
-    if (deleted > 0) {
-        logEvent('retention_run', { deleted, cutoff });
+    if (expired.length > 0) {
+        logEvent('retention_run', { deleted: expired.length, cutoff });
     }
 
-    return deleted;
+    return expired.length;
 }
 
 export async function runSymbolRetention(
@@ -125,9 +138,11 @@ export async function runSymbolRetention(
 
 export function startRetentionJob(db: Db, config: Config): () => void {
     const run = () => {
-        runRetention(db, config).catch((err) =>
-            logError('retention_error', err)
-        );
+        try {
+            runRetention(db, config);
+        } catch (err) {
+            logError('retention_error', err);
+        }
         runSymbolRetention(config).catch((err) =>
             logError('symbols_retention_error', err)
         );

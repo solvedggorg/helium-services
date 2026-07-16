@@ -1,0 +1,60 @@
+import type { Config } from './config.ts';
+import type { Db, NewReport } from './db.ts';
+import { logError } from './log.ts';
+import { dumpPath, processedPath } from './paths.ts';
+
+function removeIfExists(path: string): void {
+    try {
+        Deno.removeSync(path);
+    } catch (err) {
+        if (!(err instanceof Deno.errors.NotFound)) throw err;
+    }
+}
+
+/**
+ * Insert the row for a dump already stored at dumpPath(report.id), removing
+ * the file again if the insert fails so no unreachable dump is left behind.
+ */
+export function insertReportForStoredDump(
+    db: Db,
+    config: Config,
+    report: NewReport,
+): void {
+    try {
+        db.insertReport(report);
+    } catch (err) {
+        try {
+            removeIfExists(dumpPath(config.dataDir, report.id));
+        } catch (deleteErr) {
+            logError('report_insert_cleanup_error', deleteErr, {
+                report_id: report.id,
+            });
+        }
+        throw err;
+    }
+}
+
+export function deleteReportAndPayload(
+    db: Db,
+    config: Config,
+    reportId: string,
+): void {
+    // Delete the database row first so downloads and searches are denied even
+    // if file removal fails.
+    db.deleteReport(reportId);
+    for (
+        const [kind, path] of [
+            ['raw', dumpPath(config.dataDir, reportId)],
+            ['processed', processedPath(config.dataDir, reportId)],
+        ] as const
+    ) {
+        try {
+            removeIfExists(path);
+        } catch (err) {
+            logError('report_payload_delete_error', err, {
+                report_id: reportId,
+                kind,
+            });
+        }
+    }
+}

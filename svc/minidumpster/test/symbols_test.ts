@@ -1,7 +1,8 @@
-import { assertEquals } from '@std/assert';
+import { assertEquals, assertRejects } from '@std/assert';
 
 import { buildApp } from '../src/app.ts';
 import { makeTestEnv } from './helpers.ts';
+import { _test } from '../src/symbols.ts';
 
 Deno.test('POST /api/symbols requires the bearer token', async () => {
     const env = await makeTestEnv();
@@ -49,4 +50,17 @@ Deno.test('POST /api/symbols requires product and version', async () => {
     } finally {
         await env.cleanup();
     }
+});
+
+Deno.test('symsorter enforces a timeout', async () => {
+    await assertRejects(
+        () =>
+            _test.runSymsorter(
+                Deno.execPath(),
+                ['eval', 'await new Promise(r => setTimeout(r, 5000))'],
+                50,
+            ),
+        Error,
+        'symsorter exceeded timeout',
+    );
 });

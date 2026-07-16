@@ -33,6 +33,12 @@ export function testConfig(
     };
 }
 
+export function minimalMinidump(): Uint8Array {
+    const dump = new Uint8Array(32);
+    dump.set([0x4d, 0x44, 0x4d, 0x50]);
+    return dump;
+}
+
 export interface TestEnv {
     dir: string;
     config: Config;

@@ -7,6 +7,50 @@ function json(data: unknown, status = 200): Response {
     return Response.json(data, { status });
 }
 
+function singleArtifactFetch(
+    size: number,
+    jobConclusion: string,
+): typeof fetch {
+    return (input) => {
+        const url = new URL(
+            typeof input === 'string' || input instanceof URL
+                ? input
+                : input.url,
+        );
+        if (url.pathname.endsWith('/releases')) {
+            return Promise.resolve(json([{ tag_name: '1.0', draft: false }]));
+        }
+        if (url.pathname.includes('/commits/')) {
+            return Promise.resolve(json({ sha: 'sha' }));
+        }
+        if (url.pathname.endsWith('/actions/artifacts')) {
+            const artifacts = url.pathname.includes('/helium-linux/')
+                ? [{
+                    id: 7,
+                    name: 'helium-symbols',
+                    size_in_bytes: size,
+                    created_at: new Date().toISOString(),
+                    expired: false,
+                    workflow_run: { id: 8, head_sha: 'sha' },
+                }]
+                : [];
+            return Promise.resolve(json({
+                total_count: artifacts.length,
+                artifacts,
+            }));
+        }
+        if (url.pathname.endsWith('/actions/runs/8/jobs')) {
+            return Promise.resolve(json({
+                jobs: [{
+                    name: 'Create release',
+                    conclusion: jobConclusion,
+                }],
+            }));
+        }
+        throw new Error(`unexpected request: ${url}`);
+    };
+}
+
 Deno.test('crawler classifies platform build artifacts and symbol archives', () => {
     const symbols = /symbols/i;
     assertEquals(
@@ -69,12 +113,14 @@ Deno.test('crawler stops the pass when GitHub is rate limited', async () => {
     }
 });
 
-Deno.test('crawler ingests symbol artifacts from release-producing runs once', async () => {
+Deno.test('crawler resumes a rate-limited symbol artifact download', async () => {
     const env = await makeTestEnv({
         githubArtifactToken: 'github-artifact-token',
     });
     try {
         let uploads = 0;
+        let downloadRateLimited = true;
+        let now = 1_000_000;
         const fetchMock: typeof fetch = (input, init) => {
             const url = new URL(
                 typeof input === 'string' || input instanceof URL
@@ -162,6 +208,15 @@ Deno.test('crawler ingests symbol artifacts from release-producing runs once', a
                     }));
                 }
                 if (url.pathname.endsWith('/actions/artifacts/42/zip')) {
+                    if (downloadRateLimited) {
+                        downloadRateLimited = false;
+                        return Promise.resolve(
+                            new Response('rate limited', {
+                                status: 403,
+                                headers: { 'x-ratelimit-remaining': '0' },
+                            }),
+                        );
+                    }
                     return Promise.resolve(
                         new Response(new Uint8Array([80, 75, 3, 4]), {
                             headers: { 'content-length': '4' },
@@ -177,7 +232,7 @@ Deno.test('crawler ingests symbol artifacts from release-producing runs once', a
             config: env.config,
             fetchFn: fetchMock,
             githubApiUrl: 'https://api.test',
-            now: () => 1_000_000,
+            now: () => now,
             ingestFn: async (
                 body: ReadableStream<Uint8Array>,
                 product: string,
@@ -204,6 +259,7 @@ Deno.test('crawler ingests symbol artifacts from release-producing runs once', a
             },
         };
         await crawlArtifactsOnce(deps);
+        now += env.config.artifactCrawlerPollMs;
         await crawlArtifactsOnce(deps);
 
         assertEquals(uploads, 1);
@@ -226,50 +282,37 @@ Deno.test('crawler ignores artifacts from runs without a successful release job'
         githubArtifactToken: 'github-artifact-token',
     });
     try {
-        const fetchMock: typeof fetch = (input) => {
-            const url = new URL(
-                typeof input === 'string' || input instanceof URL
-                    ? input
-                    : input.url,
-            );
-            if (url.pathname.endsWith('/releases')) {
-                return Promise.resolve(
-                    json([{ tag_name: '1.0', draft: false }]),
-                );
-            }
-            if (url.pathname.includes('/commits/')) {
-                return Promise.resolve(json({ sha: 'sha' }));
-            }
-            if (url.pathname.endsWith('/actions/artifacts')) {
-                const isLinux = url.pathname.includes('/helium-linux/');
-                return Promise.resolve(json({
-                    total_count: isLinux ? 1 : 0,
-                    artifacts: isLinux
-                        ? [{
-                            id: 7,
-                            name: 'helium-symbols',
-                            size_in_bytes: 100,
-                            created_at: new Date().toISOString(),
-                            expired: false,
-                            workflow_run: { id: 8, head_sha: 'sha' },
-                        }]
-                        : [],
-                }));
-            }
-            if (url.pathname.endsWith('/actions/runs/8/jobs')) {
-                return Promise.resolve(json({
-                    jobs: [{ name: 'Create release', conclusion: 'skipped' }],
-                }));
-            }
-            throw new Error(`unexpected request: ${url}`);
-        };
-
         await crawlArtifactsOnce({
             db: env.db,
             config: env.config,
-            fetchFn: fetchMock,
+            fetchFn: singleArtifactFetch(100, 'skipped'),
             githubApiUrl: 'https://api.test',
         });
+        assertEquals(
+            env.db.getArtifactIngest('imputnet/helium-linux', 7),
+            null,
+        );
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('crawler ignores artifacts larger than its configured download size', async () => {
+    const env = await makeTestEnv({
+        githubArtifactToken: 'github-artifact-token',
+        artifactCrawlerMaxBytes: 100,
+    });
+    try {
+        const deps = {
+            db: env.db,
+            config: env.config,
+            fetchFn: singleArtifactFetch(101, 'success'),
+            githubApiUrl: 'https://api.test',
+            ingestFn: () => Promise.reject(new Error('should not ingest')),
+        };
+
+        await crawlArtifactsOnce(deps);
+        await crawlArtifactsOnce(deps);
         assertEquals(
             env.db.getArtifactIngest('imputnet/helium-linux', 7),
             null,

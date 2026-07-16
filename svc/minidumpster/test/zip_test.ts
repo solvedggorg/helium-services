@@ -1,28 +1,8 @@
 import { join } from '@std/path';
 import { assert, assertEquals } from '@std/assert';
-import {
-    BlobWriter,
-    TextReader,
-    Uint8ArrayReader,
-    ZipWriter,
-} from '@zip-js/zip-js';
 
 import { extractZip } from '../src/zip.ts';
-
-async function makeZip(
-    entries: [string, Uint8Array | string][],
-): Promise<Uint8Array> {
-    const writer = new ZipWriter(new BlobWriter('application/zip'));
-    for (const [name, data] of entries) {
-        await writer.add(
-            name,
-            typeof data === 'string'
-                ? new TextReader(data)
-                : new Uint8ArrayReader(data),
-        );
-    }
-    return new Uint8Array(await (await writer.close()).arrayBuffer());
-}
+import { makeZip } from './helpers.ts';
 
 Deno.test('extractZip preserves nested paths (dSYM-style bundles)', async () => {
     const dir = await Deno.makeTempDir();

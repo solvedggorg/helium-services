@@ -3,6 +3,12 @@ import { Db } from '../src/db.ts';
 import { dbPath, ensureDataDirs } from '../src/paths.ts';
 import { encodeSession } from '../src/session.ts';
 import { serializeSigned } from 'hono/utils/cookie';
+import {
+    BlobWriter,
+    TextReader,
+    Uint8ArrayReader,
+    ZipWriter,
+} from '@zip-js/zip-js';
 
 export function testConfig(
     dataDir: string,
@@ -65,6 +71,23 @@ export async function dirEntries(path: string): Promise<string[]> {
         entries.push(entry.name);
     }
     return entries;
+}
+
+export async function makeZip(
+    entries: [string, Uint8Array | string][],
+    level?: number,
+): Promise<Uint8Array> {
+    const writer = new ZipWriter(new BlobWriter('application/zip'));
+    for (const [name, data] of entries) {
+        await writer.add(
+            name,
+            typeof data === 'string'
+                ? new TextReader(data)
+                : new Uint8ArrayReader(data),
+            level === undefined ? {} : { level },
+        );
+    }
+    return new Uint8Array(await (await writer.close()).arrayBuffer());
 }
 
 export async function testSessionCookie(env: TestEnv): Promise<string> {

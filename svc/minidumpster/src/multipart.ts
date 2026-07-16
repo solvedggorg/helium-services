@@ -16,18 +16,32 @@ export interface StreamedMultipart {
     files: StreamedFile[];
 }
 
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+async function* cappedBody(
+    body: ReadableStream<Uint8Array>,
+): AsyncGenerator<Uint8Array> {
+    let received = 0;
+    for await (const chunk of body) {
+        received += chunk.byteLength;
+        if (received > MAX_BODY_BYTES) {
+            throw new Error(`multipart: body exceeds ${MAX_BODY_BYTES} bytes`);
+        }
+        yield chunk;
+    }
+}
+
 export function streamMultipartToDisk(
     body: ReadableStream<Uint8Array>,
     contentType: string,
     fileDest: (field: string, filename: string) => string,
-    opts: { maxFieldBytes?: number } = {},
 ): Promise<StreamedMultipart> {
     return new Promise((resolve, reject) => {
         let bb: busboy.Busboy;
         try {
             bb = busboy({
                 headers: { 'content-type': contentType },
-                limits: { fieldSize: opts.maxFieldBytes ?? 64 * 1024 },
+                limits: { fieldSize: 64 * 1024 },
             });
         } catch (err) {
             reject(err);
@@ -82,7 +96,6 @@ export function streamMultipartToDisk(
         });
 
         bb.on('error', fail);
-        bb.on('partsLimit', () => fail(new Error('multipart: too many parts')));
         bb.on('close', () => {
             Promise.all(fileWrites)
                 .then(() => {
@@ -93,6 +106,6 @@ export function streamMultipartToDisk(
                 .catch(fail);
         });
 
-        Readable.from(body).on('error', fail).pipe(bb);
+        Readable.from(cappedBody(body)).on('error', fail).pipe(bb);
     });
 }

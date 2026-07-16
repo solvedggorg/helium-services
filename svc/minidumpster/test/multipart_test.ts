@@ -87,3 +87,29 @@ Deno.test('streaming multipart parser rejects a missing boundary', async () => {
     }
     assert(threw, 'content-type without boundary should throw');
 });
+
+Deno.test('streaming multipart parser caps the complete body', async () => {
+    const dir = await Deno.makeTempDir();
+    try {
+        const form = new FormData();
+        form.append(
+            'file',
+            new Blob([new Uint8Array(16 * 1024 * 1024)]),
+            'large.bin',
+        );
+        const { bytes, contentType } = await encodeMultipart(form);
+        let threw = false;
+        try {
+            await streamMultipartToDisk(
+                chunked(bytes, 64 * 1024),
+                contentType,
+                () => join(dir, 'limited.bin'),
+            );
+        } catch {
+            threw = true;
+        }
+        assert(threw, 'multipart body over the limit should throw');
+    } finally {
+        await Deno.remove(dir, { recursive: true });
+    }
+});

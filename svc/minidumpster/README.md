@@ -1,7 +1,8 @@
 # minidumpster
 
 Crash reporting handler used by Helium for Crashpad minidump uploads, hosted on
-https://crash.helium.computer.
+https://crash.helium.computer. Reports are symbolicated with
+[@getsentry/symbolicator].
 
 ### privacy policy
 
@@ -13,10 +14,9 @@ process memory, they may unintentionally contain personal or otherwise sensitive
 data.
 
 crash reports are used only to diagnose and group Helium crashes. raw reports
-are kept for 30 days by default, after which they are deleted. derived metadata
-and symbolicated stack traces may be retained for longer so regressions can be
-tracked across releases. access to reports is restricted to active members of
-the imputnet GitHub organization.
+and derived report data are kept for 30 days by default, after which they are
+automatically deleted. access to reports is restricted to active members of the
+imputnet GitHub organization.
 
 client IP addresses are used temporarily for rate limiting and are not stored by
 this service. logs contain report identifiers and technical build or processing
@@ -26,11 +26,14 @@ information, but do not contain crash dumps or arbitrary crash annotations.
 
 ```sh
 cp .env.example .env
-# fill in all required field (see inline comments for help)
+# fill in all required fields (see inline comments for help)
 
 mkdir -p data
 docker compose up -d --build
 ```
+
+the crash endpoint uses the first `X-Forwarded-For` address for rate limiting,
+so the reverse proxy must overwrite that header.
 
 ## usage
 

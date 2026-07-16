@@ -77,10 +77,6 @@ export function ingestRoutes(deps: AppDeps): Hono<Env> {
 
                 logEvent('report_received', {
                     report_id: id,
-                    product: annotations['prod'] ?? null,
-                    version: annotations['ver'] ?? null,
-                    ptype: annotations['ptype'] ?? null,
-                    channel: annotations['channel'] ?? null,
                     dump_bytes: dump.byteLength,
                 });
 

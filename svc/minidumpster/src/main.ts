@@ -33,7 +33,12 @@ if (import.meta.main) {
         data_dir: config.dataDir,
     });
 
+    let shuttingDown = false;
     const shutdown = async () => {
+        if (shuttingDown) {
+            return;
+        }
+        shuttingDown = true;
         Log.logEvent('server_stopping');
         stopRetention();
         await artifactCrawler.stop();

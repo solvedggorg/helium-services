@@ -29,19 +29,18 @@ code,
 
 header {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 1rem;
     padding: 1rem 0;
     border-bottom: 1px solid color-mix(in srgb, var(--line) 27%, transparent);
     margin-bottom: 1rem;
 
-    h1 {
-        font-size: 1.2rem;
-        margin: 0;
+    a.brand {
+        display: flex;
 
-        a {
-            text-decoration: none;
-            color: inherit;
+        img {
+            width: 24px;
+            height: 24px;
         }
     }
 
@@ -188,4 +187,25 @@ form.filters {
 
 .overflow {
     overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+    header {
+        flex-wrap: wrap;
+
+        .user {
+            margin-left: 0;
+        }
+
+        form.search {
+            order: 1;
+            flex: 1 0 100%;
+            margin-left: 0;
+
+            input {
+                box-sizing: border-box;
+                width: 100%;
+            }
+        }
+    }
 }

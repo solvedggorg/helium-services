@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { serveStatic } from 'hono/deno';
 
 import * as ui from '../ui.ts';
 import { logError, logEvent } from '../log.ts';
@@ -16,10 +17,6 @@ import {
     looksLikeAppleCrashReport,
     parseAppleCrashMeta,
 } from '../applecrash.ts';
-
-const styleCss = Deno.readTextFileSync(
-    new URL('../static/style.css', import.meta.url),
-);
 
 async function readProcessed(
     dataDir: string,
@@ -64,13 +61,11 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     const { config, db } = deps;
     const app = new Hono<Env>();
 
-    // Registered before the session gate: the login/denied pages served by the
-    // auth routes use the same layout, so the stylesheet must be public.
-    app.get('/style.css', (c) =>
-        c.body(styleCss, 200, {
-            'content-type': 'text/css; charset=utf-8',
-            'cache-control': 'public, max-age=300',
-        }));
+    // Registered before the session gate: login/denied pages use the shared
+    // layout, so its static assets must be public.
+    app.get('/style.css', serveStatic({ path: './src/static/style.css' }));
+    app.get('/favicon.svg', serveStatic({ path: './src/static/favicon.svg' }));
+    app.get('/app.js', serveStatic({ path: './src/static/app.js' }));
 
     app.use('*', requireSession(config));
 

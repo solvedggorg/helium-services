@@ -81,12 +81,12 @@ Deno.test('groupsPage renders populated rows', () => {
     assert(html.includes('jj'));
     assert(
         html.includes(
-            '<link rel="icon" type="image/svg+xml" href="/favicon.svg">',
+            '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">',
         ),
     );
     assert(
         html.includes(
-            '<a class="brand" href="/" aria-label="minidumpster"><img src="/favicon.svg" alt=""></a>',
+            '<a class="brand" href="/" aria-label="minidumpster"><img src="/static/favicon.svg" alt=""></a>',
         ),
     );
 });

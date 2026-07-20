@@ -286,6 +286,10 @@ async function downloadArtifact(
                     'artifact server did not honor download resume range',
                 );
             }
+
+            // artifactSize comes from GitHub's artifact metadata, not this
+            // HTTP response. fetch does not know that expected size, so check
+            // both the advertised length and the streamed bytes against it.
             const declared = Number(response.headers.get('content-length'));
             if (
                 Number.isFinite(declared)

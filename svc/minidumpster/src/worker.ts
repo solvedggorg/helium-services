@@ -124,10 +124,10 @@ export async function processReport(
 }
 
 export function startWorker(deps: WorkerDeps) {
-    const abort = new AbortController();
+    const controller = new AbortController();
     const signal = deps.signal
-        ? AbortSignal.any([abort.signal, deps.signal])
-        : abort.signal;
+        ? AbortSignal.any([controller.signal, deps.signal])
+        : controller.signal;
     const workerDeps = { ...deps, signal };
     const requeued = deps.db.resetProcessing();
     if (requeued > 0) {
@@ -178,7 +178,7 @@ export function startWorker(deps: WorkerDeps) {
 
     return {
         stop() {
-            abort.abort();
+            controller.abort();
             return loop;
         },
     };

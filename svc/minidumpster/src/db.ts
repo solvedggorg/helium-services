@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 
-export type ReportStatus = 'pending' | 'processing' | 'processed';
+export type ReportStatus = 'pending' | 'processing' | 'processed' | 'failed';
 export type ReportKind = 'minidump' | 'apple';
 
 export interface ReportRow {
@@ -98,8 +98,6 @@ CREATE INDEX IF NOT EXISTS idx_reports_queue
   ON reports(status, next_attempt_at, received_at);
 CREATE INDEX IF NOT EXISTS idx_reports_group ON reports(group_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_reports_prod_ver ON reports(product, version);
--- Migration: replaced by idx_reports_queue in databases created before it.
-DROP INDEX IF EXISTS idx_reports_status;
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   signature TEXT UNIQUE NOT NULL,
@@ -122,6 +120,24 @@ CREATE TABLE IF NOT EXISTS artifact_ingests (
 );
 `;
 
+function migrateSchema(db: DatabaseSync): void {
+    // Replaced by idx_reports_queue in databases created before it.
+    db.exec('DROP INDEX IF EXISTS idx_reports_status');
+
+    const legacyColumn = db.prepare(`
+        SELECT 1
+        FROM pragma_table_info('reports')
+        WHERE name = 'dump_deleted'
+        LIMIT 1
+    `).get();
+
+    if (!legacyColumn) {
+        return;
+    }
+
+    db.exec('ALTER TABLE reports DROP COLUMN dump_deleted');
+}
+
 export class Db {
     private db: DatabaseSync;
 
@@ -130,6 +146,7 @@ export class Db {
         this.db.exec('PRAGMA journal_mode = WAL;');
         this.db.exec('PRAGMA busy_timeout = 5000;');
         this.db.exec(SCHEMA);
+        migrateSchema(this.db);
     }
 
     private one<T extends object>(

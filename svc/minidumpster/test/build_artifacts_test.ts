@@ -126,6 +126,37 @@ Deno.test('artifact downloads do not retry streamed size violations', async () =
     }
 });
 
+Deno.test('artifact downloads reject a size header that exceeds metadata', async () => {
+    const dir = await Deno.makeTempDir();
+    try {
+        let requests = 0;
+        const fetchMock: typeof fetch = () => {
+            requests++;
+            return Promise.resolve(
+                new Response(new Uint8Array([1, 2, 3]), {
+                    headers: { 'content-length': '3' },
+                }),
+            );
+        };
+
+        await assertRejects(
+            () =>
+                _test.downloadArtifact(
+                    'https://example.test/artifact.zip',
+                    2,
+                    'token',
+                    join(dir, 'artifact.zip'),
+                    fetchMock,
+                ),
+            Error,
+            'exceeds its declared metadata size',
+        );
+        assertEquals(requests, 1);
+    } finally {
+        await Deno.remove(dir, { recursive: true });
+    }
+});
+
 Deno.test('artifact downloads retry transient connection failures', async () => {
     const dir = await Deno.makeTempDir();
     try {

@@ -16,21 +16,6 @@ export interface StreamedMultipart {
     files: StreamedFile[];
 }
 
-const MAX_BODY_BYTES = 16 * 1024 * 1024;
-
-async function* cappedBody(
-    body: ReadableStream<Uint8Array>,
-): AsyncGenerator<Uint8Array> {
-    let received = 0;
-    for await (const chunk of body) {
-        received += chunk.byteLength;
-        if (received > MAX_BODY_BYTES) {
-            throw new Error(`multipart: body exceeds ${MAX_BODY_BYTES} bytes`);
-        }
-        yield chunk;
-    }
-}
-
 export function streamMultipartToDisk(
     body: ReadableStream<Uint8Array>,
     contentType: string,
@@ -106,6 +91,6 @@ export function streamMultipartToDisk(
                 .catch(fail);
         });
 
-        Readable.from(cappedBody(body)).on('error', fail).pipe(bb);
+        Readable.from(body).on('error', fail).pipe(bb);
     });
 }

@@ -3,6 +3,15 @@ import type { Db, NewReport } from './db.ts';
 import { logError } from './log.ts';
 import { dumpPath, processedPath } from './paths.ts';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function reportExpiresAt(
+    receivedAt: number,
+    retentionDays: number,
+): number {
+    return receivedAt + retentionDays * DAY_MS;
+}
+
 function removeIfExists(path: string): void {
     try {
         Deno.removeSync(path);

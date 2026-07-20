@@ -7,7 +7,7 @@ import { requireSession } from './auth.ts';
 import type { GroupFilter } from '../db.ts';
 import type { AppDeps, Env } from '../app.ts';
 import type { SymbolicatorResponse } from '../signature.ts';
-import { insertReportForStoredDump } from '../reports.ts';
+import { insertReportForStoredDump, reportExpiresAt } from '../reports.ts';
 import {
     dumpPath,
     processedPath,
@@ -72,9 +72,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
 
     // Registered before the session gate: login/denied pages use the shared
     // layout, so its static assets must be public.
-    app.get('/style.css', serveStatic({ path: './src/static/style.css' }));
-    app.get('/favicon.svg', serveStatic({ path: './src/static/favicon.svg' }));
-    app.get('/app.js', serveStatic({ path: './src/static/app.js' }));
+    app.use('/static/*', serveStatic({ root: './src' }));
 
     app.use('*', requireSession(config));
     app.use('*', disablePrivateResponseCaching);
@@ -155,7 +153,6 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             text = pasted;
         }
         text = text.trim();
-        const encoded = new TextEncoder().encode(text);
 
         if (text === '') {
             return c.html(
@@ -163,6 +160,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                 400,
             );
         }
+        const encoded = new TextEncoder().encode(text);
         if (encoded.byteLength > config.maxDumpSizeBytes) {
             return c.html(ui.uploadPage(login, 'Report too large.'), 413);
         }
@@ -182,6 +180,9 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             ? db.findReportByGuid(meta.incidentId)
             : null;
         if (existing) {
+            if (existing.status === 'failed') {
+                db.markRetry(existing.id, 'requeued by re-upload', 0, 0);
+            }
             return c.redirect(`/reports/${existing.id}`);
         }
 
@@ -266,7 +267,10 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                 report,
                 group,
                 stack,
-                report.received_at + config.retentionDays * 86_400_000,
+                reportExpiresAt(
+                    report.received_at,
+                    config.retentionDays,
+                ),
                 c.get('session').login,
             ),
         );

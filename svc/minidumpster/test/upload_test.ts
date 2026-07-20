@@ -1,7 +1,9 @@
 import { assert, assertEquals } from '@std/assert';
+import { DatabaseSync } from 'node:sqlite';
 
 import { buildApp } from '../src/app.ts';
 import {
+    dbPath,
     dumpPath,
     processedPath,
     tmpDir,
@@ -40,7 +42,7 @@ Deno.test('pasted Apple crash reports are filed and deduped by incident id', asy
         form.append('text', await fixture());
         const res = await app.request('/upload', {
             method: 'POST',
-            headers: { cookie: cookie },
+            headers: { cookie },
             body: form,
         });
         assertEquals(res.status, 302);
@@ -66,7 +68,7 @@ Deno.test('pasted Apple crash reports are filed and deduped by incident id', asy
         // Same incident again → redirected to the existing report.
         const again = await app.request('/upload', {
             method: 'POST',
-            headers: { cookie: cookie },
+            headers: { cookie },
             body: (() => {
                 const f = new FormData();
                 f.append('text', stored);
@@ -75,6 +77,31 @@ Deno.test('pasted Apple crash reports are filed and deduped by incident id', asy
         });
         assertEquals(again.status, 302);
         assertEquals(again.headers.get('location'), `/reports/${id}`);
+
+        const legacyDb = new DatabaseSync(dbPath(env.dir));
+        try {
+            legacyDb.prepare(
+                `UPDATE reports
+                 SET status = 'failed', error = 'old failure', attempts = 5
+                 WHERE id = ?`,
+            ).run(id);
+        } finally {
+            legacyDb.close();
+        }
+
+        const retryForm = new FormData();
+        retryForm.append('text', stored);
+        const retry = await app.request('/upload', {
+            method: 'POST',
+            headers: { cookie },
+            body: retryForm,
+        });
+        assertEquals(retry.status, 302);
+        assertEquals(retry.headers.get('location'), `/reports/${id}`);
+        const requeued = env.db.getReport(id)!;
+        assertEquals(requeued.status, 'pending');
+        assertEquals(requeued.error, 'requeued by re-upload');
+        assertEquals(requeued.attempts, 0);
     } finally {
         await env.cleanup();
     }
@@ -90,7 +117,7 @@ Deno.test('upload rejects non-crash-report input and requires a session', async 
         form.append('text', '{"app_name":"Helium","bug_type":"309"}');
         const bad = await app.request('/upload', {
             method: 'POST',
-            headers: { cookie: cookie },
+            headers: { cookie },
             body: form,
         });
         assertEquals(bad.status, 400);
@@ -119,7 +146,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         const ok = await app.request('/upload', {
             method: 'POST',
             headers: {
-                cookie: cookie,
+                cookie,
                 'content-type': encoded.contentType,
             },
             body: chunked(encoded.bytes, 17),
@@ -132,7 +159,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         const rejected = await app.request('/upload', {
             method: 'POST',
             headers: {
-                cookie: cookie,
+                cookie,
                 'content-type': tooLarge.contentType,
             },
             body: chunked(tooLarge.bytes, 11),
@@ -148,7 +175,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         );
         const fileRejected = await app.request('/upload', {
             method: 'POST',
-            headers: { cookie: cookie },
+            headers: { cookie },
             body: oversizedFile,
         });
         assertEquals(fileRejected.status, 413);
@@ -171,7 +198,7 @@ Deno.test('manual upload removes the payload when database insertion fails', asy
         form.append('text', await fixture());
         const res = await app.request('/upload', {
             method: 'POST',
-            headers: { cookie: cookie },
+            headers: { cookie },
             body: form,
         });
         assertEquals(res.status, 500);
@@ -216,7 +243,7 @@ Deno.test('authenticated report responses are not cached', async () => {
         env.db.markProcessed(id, group, 'macOS', Date.now(), true, 1);
 
         const initialPage = await app.request(`/reports/${id}`, {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         const initialHtml = await initialPage.text();
         assertEquals(
@@ -230,14 +257,14 @@ Deno.test('authenticated report responses are not cached', async () => {
         );
 
         const dump = await app.request(`/reports/${id}/dump`, {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         assertEquals(dump.status, 200);
         assertEquals(dump.headers.get('cache-control'), 'private, no-store');
         assertEquals(await dump.text(), 'raw');
 
         const processed = await app.request(`/reports/${id}/json`, {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         assertEquals(processed.status, 200);
         assertEquals(
@@ -277,7 +304,7 @@ Deno.test('worker symbolicates Apple reports via /applecrashreport', async () =>
         form.append('text', await fixture());
         const res = await app.request('/upload', {
             method: 'POST',
-            headers: { cookie: cookie },
+            headers: { cookie },
             body: form,
         });
         const id = res.headers.get('location')!.slice('/reports/'.length);
@@ -311,7 +338,7 @@ Deno.test('worker symbolicates Apple reports via /applecrashreport', async () =>
 
         // The report page shows product, version, and platform.
         const page = await app.request(`/reports/${id}`, {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         assertEquals(page.status, 200);
         const html = await page.text();
@@ -343,14 +370,14 @@ Deno.test('search finds reports by id, id prefix, and guid', async () => {
         // Full id → direct redirect (case-insensitive).
         const byId = await app.request(
             `/search?q=${id.toUpperCase()}`,
-            { headers: { cookie: cookie } },
+            { headers: { cookie } },
         );
         assertEquals(byId.status, 302);
         assertEquals(byId.headers.get('location'), `/reports/${id}`);
 
         // 8-char prefix, as shown in the UI → redirect.
         const byPrefix = await app.request(`/search?q=${id.slice(0, 8)}`, {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         assertEquals(byPrefix.status, 302);
         assertEquals(byPrefix.headers.get('location'), `/reports/${id}`);
@@ -358,21 +385,21 @@ Deno.test('search finds reports by id, id prefix, and guid', async () => {
         // Guid (lowercased by the user) → redirect.
         const byGuid = await app.request(
             `/search?q=${guid.toLowerCase()}`,
-            { headers: { cookie: cookie } },
+            { headers: { cookie } },
         );
         assertEquals(byGuid.status, 302);
         assertEquals(byGuid.headers.get('location'), `/reports/${id}`);
 
         // No match → results page, not an error.
         const none = await app.request('/search?q=ffffffff', {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         assertEquals(none.status, 200);
         assert((await none.text()).includes('No reports match'));
 
         // Too-short queries are rejected.
         const short = await app.request('/search?q=ab', {
-            headers: { cookie: cookie },
+            headers: { cookie },
         });
         assertEquals(short.status, 400);
         await short.body?.cancel();

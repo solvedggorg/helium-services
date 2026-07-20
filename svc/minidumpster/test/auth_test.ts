@@ -146,7 +146,11 @@ Deno.test('OAuth callback grants a session to active org members', async () => {
             );
             const homeHtml = await home.text();
             assert(homeHtml.includes('minidumpster'));
-            assert(homeHtml.includes('<script src="/app.js" defer></script>'));
+            assert(
+                homeHtml.includes(
+                    '<script src="/static/app.js" defer></script>',
+                ),
+            );
             assertEquals(homeHtml.includes('<script>'), false);
 
             env.db.registerArtifact(
@@ -252,7 +256,7 @@ Deno.test('shared page assets are served without a session', async () => {
     try {
         const app = buildApp({ config: env.config, db: env.db });
 
-        const res = await app.request('/style.css');
+        const res = await app.request('/static/style.css');
         assertEquals(res.status, 200);
         assertEquals(res.headers.get('x-content-type-options'), 'nosniff');
         assert(
@@ -277,7 +281,7 @@ Deno.test('shared page assets are served without a session', async () => {
         );
         assert((await res.text()).includes('.expandable'));
 
-        const favicon = await app.request('/favicon.svg');
+        const favicon = await app.request('/static/favicon.svg');
         assertEquals(favicon.status, 200);
         assertEquals(
             favicon.headers.get('content-type'),
@@ -285,7 +289,7 @@ Deno.test('shared page assets are served without a session', async () => {
         );
         assert((await favicon.text()).startsWith('<svg'));
 
-        const script = await app.request('/app.js');
+        const script = await app.request('/static/app.js');
         assertEquals(script.status, 200);
         assertEquals(
             script.headers.get('content-type'),

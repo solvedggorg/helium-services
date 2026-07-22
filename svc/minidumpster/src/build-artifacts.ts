@@ -1,5 +1,5 @@
 import { basename, join } from '@std/path';
-import { configure, type FileEntry, Reader, ZipReader } from '@zip-js/zip-js';
+import { type FileEntry, Reader, ZipReader } from '@zip-js/zip-js';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
@@ -8,7 +8,7 @@ import { x as extractTar } from 'tar';
 
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
-import { githubHttpError } from './github.ts';
+import { githubApiHeaders, githubHttpError } from './github.ts';
 import { logEvent } from './log.ts';
 import { tmpDir } from './paths.ts';
 import {
@@ -16,10 +16,13 @@ import {
     type SymbolIngestAndRequeueResult,
     type SymbolsOptions,
 } from './symbols.ts';
-
-configure({ useWebWorkers: false });
+import { DenoFileReader } from './zip.ts';
 
 export type BuildArtifactKind = 'mac-build' | 'windows-build';
+
+const MAX_DOWNLOAD_ATTEMPTS = 5;
+
+class ArtifactSizeMismatchError extends Error {}
 
 function zstdDecompressionStream(): TransformStream<Uint8Array, Uint8Array> {
     let decoder: Decompress;
@@ -37,23 +40,6 @@ function zstdDecompressionStream(): TransformStream<Uint8Array, Uint8Array> {
             decoder.push(new Uint8Array(), true);
         },
     });
-}
-
-class DenoFileReader extends Reader<Deno.FsFile> {
-    constructor(private file: Deno.FsFile) {
-        super(file);
-    }
-
-    override async init(): Promise<void> {
-        this.size = (await this.file.stat()).size;
-    }
-
-    override async readUint8Array(
-        index: number,
-        length: number,
-    ): Promise<Uint8Array> {
-        return await readFileRange(this.file, index, length);
-    }
 }
 
 interface RandomReader {
@@ -74,41 +60,18 @@ class SliceReader extends Reader<null> {
         return Promise.resolve();
     }
 
-    override async readUint8Array(
+    override readUint8Array(
         index: number,
         length: number,
     ): Promise<Uint8Array> {
         if (index < 0 || length < 0 || index + length > this.sliceSize) {
             throw new Error('nested ZIP read is outside the stored entry');
         }
-        return await this.parent.readUint8Array(
+        return this.parent.readUint8Array(
             this.baseOffset + index,
             length,
         );
     }
-}
-
-async function readFileRange(
-    file: Deno.FsFile,
-    index: number,
-    length: number,
-): Promise<Uint8Array> {
-    await file.seek(index, Deno.SeekMode.Start);
-    const buf = new Uint8Array(length);
-    let offset = 0;
-    while (offset < length) {
-        const read = await file.read(buf.subarray(offset));
-        if (read === null) {
-            break;
-        }
-
-        offset += read;
-    }
-    if (offset !== length) {
-        throw new Error('unexpected end of artifact');
-    }
-
-    return buf;
 }
 
 async function countFiles(path: string): Promise<number> {
@@ -139,7 +102,6 @@ async function extractMacBuildReader<T>(
         if (!buildEntry) {
             throw new Error('macOS artifact has no build_src.tar.zst');
         }
-
         const extractor = extractTar({
             cwd: destDir,
             strict: true,
@@ -196,11 +158,9 @@ async function extractWindowsBuildReader<T>(
 ): Promise<number> {
     const outer = new ZipReader(reader);
     try {
-        let nestedEntry:
-            | Awaited<ReturnType<typeof outer.getEntries>>[number]
-            | undefined;
+        let nestedEntry: FileEntry | undefined;
         for await (const entry of outer.getEntriesGenerator()) {
-            if (entry.filename === 'artifacts.zip') {
+            if (!entry.directory && entry.filename === 'artifacts.zip') {
                 nestedEntry = entry;
                 break;
             }
@@ -208,7 +168,6 @@ async function extractWindowsBuildReader<T>(
         if (!nestedEntry || nestedEntry.compressionMethod !== 0) {
             throw new Error('Windows artifact has no stored artifacts.zip');
         }
-
         const dataOffset = await storedEntryDataOffset(
             reader,
             nestedEntry.offset,
@@ -255,31 +214,16 @@ async function extractWindowsBuildReader<T>(
     }
 }
 
-async function extractMacBuild(
+async function extractBuild(
     artifactPath: string,
     destDir: string,
+    kind: BuildArtifactKind,
 ): Promise<number> {
-    const file = await Deno.open(artifactPath, { read: true });
-    try {
-        return await extractMacBuildReader(new DenoFileReader(file), destDir);
-    } finally {
-        file.close();
-    }
-}
-
-async function extractWindowsBuild(
-    artifactPath: string,
-    destDir: string,
-): Promise<number> {
-    const file = await Deno.open(artifactPath, { read: true });
-    try {
-        return await extractWindowsBuildReader(
-            new DenoFileReader(file),
-            destDir,
-        );
-    } finally {
-        file.close();
-    }
+    using file = await Deno.open(artifactPath, { read: true });
+    const reader = new DenoFileReader(file);
+    return await (kind === 'mac-build'
+        ? extractMacBuildReader(reader, destDir)
+        : extractWindowsBuildReader(reader, destDir));
 }
 
 async function downloadArtifact(
@@ -294,30 +238,42 @@ async function downloadArtifact(
         create: true,
         truncate: true,
         write: true,
+        mode: 0o600,
     });
     let downloaded = 0;
     let lastLogged = 0;
     const started = Date.now();
+    const logRetry = (attempt: number, err: unknown) =>
+        logEvent('artifact_build_download_retry', {
+            bytes: downloaded,
+            total_bytes: artifactSize,
+            attempt: attempt + 1,
+            error: err instanceof Error ? err.message : String(err),
+        });
 
     try {
         for (
             let attempt = 1;
-            attempt <= 5 && downloaded < artifactSize;
+            attempt <= MAX_DOWNLOAD_ATTEMPTS && downloaded < artifactSize;
             attempt++
         ) {
-            const headers: Record<string, string> = {
-                Accept: 'application/vnd.github+json',
-                Authorization: `Bearer ${token}`,
-                'X-GitHub-Api-Version': '2022-11-28',
-                'User-Agent': 'minidumpster-artifact-crawler',
-            };
+            const headers = githubApiHeaders(token);
             if (downloaded > 0) headers.Range = `bytes=${downloaded}-`;
 
-            const response = await fetchFn(artifactUrl, {
-                headers,
-                redirect: 'follow',
-                signal,
-            });
+            let response: Response;
+            try {
+                response = await fetchFn(artifactUrl, {
+                    headers,
+                    redirect: 'follow',
+                    signal,
+                });
+            } catch (err) {
+                if (attempt >= MAX_DOWNLOAD_ATTEMPTS || signal?.aborted) {
+                    throw err;
+                }
+                logRetry(attempt, err);
+                continue;
+            }
             if (!response.ok || !response.body) {
                 throw await githubHttpError(
                     'GitHub artifact download failed',
@@ -326,22 +282,39 @@ async function downloadArtifact(
             }
             if (downloaded > 0 && response.status !== 206) {
                 await response.body.cancel();
-                throw new Error(
+                throw new ArtifactSizeMismatchError(
                     'artifact server did not honor download resume range',
+                );
+            }
+
+            // artifactSize comes from GitHub's artifact metadata, not this
+            // HTTP response. fetch does not know that expected size, so check
+            // both the advertised length and the streamed bytes against it.
+            const declared = Number(response.headers.get('content-length'));
+            if (
+                Number.isFinite(declared)
+                && declared > artifactSize - downloaded
+            ) {
+                await response.body.cancel();
+                throw new Error(
+                    'artifact response exceeds its declared metadata size',
                 );
             }
 
             try {
                 for await (const chunk of response.body) {
-                    let offset = 0;
-                    while (offset < chunk.length) {
-                        offset += await file.write(chunk.subarray(offset));
-                    }
-                    downloaded += chunk.length;
-                    if (downloaded > artifactSize) {
-                        throw new Error(
+                    if (chunk.length > artifactSize - downloaded) {
+                        throw new ArtifactSizeMismatchError(
                             `artifact download exceeded expected size ${artifactSize}`,
                         );
+                    }
+                    let offset = 0;
+                    while (offset < chunk.length) {
+                        const written = await file.write(
+                            chunk.subarray(offset),
+                        );
+                        offset += written;
+                        downloaded += written;
                     }
                     if (downloaded - lastLogged >= 512 * 1024 * 1024) {
                         lastLogged = downloaded;
@@ -356,26 +329,23 @@ async function downloadArtifact(
                     }
                 }
             } catch (err) {
-                if (attempt >= 5 || signal?.aborted) {
+                if (
+                    err instanceof ArtifactSizeMismatchError
+                    || attempt >= MAX_DOWNLOAD_ATTEMPTS
+                    || signal?.aborted
+                ) {
                     throw err;
                 }
 
-                logEvent('artifact_build_download_retry', {
-                    bytes: downloaded,
-                    total_bytes: artifactSize,
-                    attempt: attempt + 1,
-                    error: err instanceof Error ? err.message : String(err),
-                });
+                logRetry(attempt, err);
                 continue;
             }
 
-            if (downloaded < artifactSize && attempt < 5) {
-                logEvent('artifact_build_download_retry', {
-                    bytes: downloaded,
-                    total_bytes: artifactSize,
-                    attempt: attempt + 1,
-                    error: 'download ended before the expected artifact size',
-                });
+            if (downloaded < artifactSize && attempt < MAX_DOWNLOAD_ATTEMPTS) {
+                logRetry(
+                    attempt,
+                    'download ended before the expected artifact size',
+                );
             }
         }
     } finally {
@@ -427,9 +397,7 @@ export async function ingestBuildArtifact(
         );
         let files: number;
         try {
-            files = kind === 'mac-build'
-                ? await extractMacBuild(artifactPath, extractedDir)
-                : await extractWindowsBuild(artifactPath, extractedDir);
+            files = await extractBuild(artifactPath, extractedDir, kind);
         } catch (err) {
             throw new Error(
                 `build artifact extraction failed: ${
@@ -455,6 +423,5 @@ export async function ingestBuildArtifact(
 
 export const _test = {
     downloadArtifact,
-    extractMacBuild,
-    extractWindowsBuild,
+    extractBuild,
 };

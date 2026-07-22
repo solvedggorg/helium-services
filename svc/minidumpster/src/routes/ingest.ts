@@ -6,6 +6,7 @@ import { logError, logEvent } from '../log.ts';
 import type { AppDeps, Env } from '../app.ts';
 import { ingestSymbolUpload } from '../symbols.ts';
 import { dumpPath, writeFileWithDirs } from '../paths.ts';
+import { insertReportForStoredDump } from '../reports.ts';
 import { HttpError, parseCrashRequest } from '../crash.ts';
 import { symbolicatorReachable } from '../symbolicator.ts';
 
@@ -61,11 +62,9 @@ export function ingestRoutes(deps: AppDeps): Hono<Env> {
                     c.req.raw,
                     config.maxDumpSizeBytes,
                 );
-
                 const id = crypto.randomUUID();
                 await writeFileWithDirs(dumpPath(config.dataDir, id), dump);
-
-                db.insertReport({
+                insertReportForStoredDump(db, config, {
                     id,
                     product: annotations['prod'] ?? null,
                     version: annotations['ver'] ?? null,
@@ -78,10 +77,6 @@ export function ingestRoutes(deps: AppDeps): Hono<Env> {
 
                 logEvent('report_received', {
                     report_id: id,
-                    product: annotations['prod'] ?? null,
-                    version: annotations['ver'] ?? null,
-                    ptype: annotations['ptype'] ?? null,
-                    channel: annotations['channel'] ?? null,
                     dump_bytes: dump.byteLength,
                 });
 

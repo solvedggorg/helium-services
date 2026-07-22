@@ -6,7 +6,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 ARG SYMSORTER_VERSION=26.6.0
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 RUN arch="x86_64"; [ "$TARGETARCH" = "arm64" ] && arch="aarch64"; \
   curl -fsSL -o /usr/local/bin/symsorter \
   "https://github.com/getsentry/symbolicator/releases/download/${SYMSORTER_VERSION}/symsorter-Linux-${arch}" \

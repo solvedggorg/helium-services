@@ -1,16 +1,20 @@
+import { setTimeout as delay } from 'node:timers/promises';
+import { logError } from './log.ts';
 import type { SymbolicatorResponse } from './signature.ts';
+
+const REQUEST_TIMEOUT_SECONDS = 5 * 60;
 
 export interface SymbolicateOptions {
     fetchFn?: typeof fetch;
     /** Delay between polls when Symbolicator doesn't suggest one. */
     pollIntervalMs?: number;
-    /** Give up on one report after this long in the pending/poll loop. */
+    /** Give up on the complete POST and polling operation after this long. */
     maxWaitMs?: number;
+    /** Cancel the operation early, such as during service shutdown. */
+    signal?: AbortSignal;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-export async function symbolicateMinidump(
+export function symbolicateMinidump(
     baseUrl: string,
     dump: Uint8Array,
     opts: SymbolicateOptions = {},
@@ -22,10 +26,10 @@ export async function symbolicateMinidump(
         'upload_file_minidump.dmp',
     );
 
-    return await submitAndPoll(baseUrl, '/minidump', form, opts);
+    return submitAndPoll(baseUrl, '/minidump', form, opts);
 }
 
-export async function symbolicateAppleCrashReport(
+export function symbolicateAppleCrashReport(
     baseUrl: string,
     reportText: string,
     opts: SymbolicateOptions = {},
@@ -37,7 +41,16 @@ export async function symbolicateAppleCrashReport(
         'apple_crash_report.crash',
     );
 
-    return await submitAndPoll(baseUrl, '/applecrashreport', form, opts);
+    return submitAndPoll(baseUrl, '/applecrashreport', form, opts);
+}
+
+async function responseError(context: string, response: Response) {
+    const detail = await response.text().catch(() => '');
+    logError('symbolicator_http_error', detail.slice(0, 500), {
+        context,
+        status: response.status,
+    });
+    return new Error(`${context}: ${response.status}`);
 }
 
 async function submitAndPoll(
@@ -49,56 +62,49 @@ async function submitAndPoll(
     const fetchFn = opts.fetchFn ?? fetch;
     const pollIntervalMs = opts.pollIntervalMs ?? 1000;
     const maxWaitMs = opts.maxWaitMs ?? 5 * 60 * 1000;
+    const deadline = AbortSignal.timeout(maxWaitMs);
+    const signal = opts.signal
+        ? AbortSignal.any([deadline, opts.signal])
+        : deadline;
 
-    const res = await fetchFn(`${baseUrl}${endpoint}`, {
-        method: 'POST',
-        body: form,
-    });
+    const res = await fetchFn(
+        `${baseUrl}${endpoint}?timeout=${REQUEST_TIMEOUT_SECONDS}`,
+        {
+            method: 'POST',
+            body: form,
+            signal,
+        },
+    );
     if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(
-            `symbolicator POST ${endpoint} failed: ${res.status} ${
-                text.slice(0, 500)
-            }`,
+        throw await responseError(
+            `symbolicator POST ${endpoint} failed`,
+            res,
         );
     }
 
     let body = await res.json() as SymbolicatorResponse;
 
-    const deadline = Date.now() + maxWaitMs;
     while (body.status === 'pending') {
         if (!body.request_id) {
             throw new Error('symbolicator returned pending without request_id');
         }
-        if (Date.now() > deadline) {
-            throw new Error('symbolicator request timed out while pending');
-        }
-
-        await sleep(
+        await delay(
             body.retry_after !== undefined
                 ? body.retry_after * 1000
                 : pollIntervalMs,
+            undefined,
+            { signal },
         );
 
         const poll = await fetchFn(
-            `${baseUrl}/requests/${body.request_id}?timeout=30`,
+            `${baseUrl}/requests/${body.request_id}?timeout=${REQUEST_TIMEOUT_SECONDS}`,
+            { signal },
         );
         if (!poll.ok) {
-            const text = await poll.text().catch(() => '');
-            throw new Error(
-                `symbolicator poll failed: ${poll.status} ${
-                    text.slice(0, 500)
-                }`,
-            );
+            throw await responseError('symbolicator poll failed', poll);
         }
 
         body = await poll.json() as SymbolicatorResponse;
-    }
-
-    if (body.status !== 'completed') {
-        throw new Error(
-            `symbolication ${body.status}: ${body.message ?? 'no details'}`,
-        );
     }
 
     return body;

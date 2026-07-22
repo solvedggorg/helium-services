@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import type { Config } from './config.ts';
 import type { Db } from './db.ts';
 import { logError, logEvent } from './log.ts';
@@ -9,14 +11,18 @@ import {
     type BuildArtifactKind,
     ingestBuildArtifact,
 } from './build-artifacts.ts';
-import { GithubHttpError, githubHttpError } from './github.ts';
+import {
+    githubApiHeaders,
+    GithubHttpError,
+    githubHttpError,
+} from './github.ts';
 
 const GITHUB_API = 'https://api.github.com';
 const MAX_RELEASES = 10;
 const MAX_ARTIFACT_PAGES = 10;
 const MAX_ATTEMPTS = 5;
 
-export const HELIUM_REPOS = [
+const HELIUM_REPOS = [
     'imputnet/helium-macos',
     'imputnet/helium-windows',
     'imputnet/helium-linux',
@@ -96,15 +102,6 @@ function artifactKind(
     return symbolPattern.test(name) ? 'symbols' : null;
 }
 
-function apiHeaders(token: string): HeadersInit {
-    return {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': 'minidumpster-artifact-crawler',
-    };
-}
-
 async function githubJson<T>(
     fetchFn: typeof fetch,
     url: string,
@@ -112,7 +109,7 @@ async function githubJson<T>(
     signal?: AbortSignal,
 ): Promise<T> {
     const res = await fetchFn(url, {
-        headers: apiHeaders(token),
+        headers: githubApiHeaders(token),
         signal,
     });
     if (!res.ok) {
@@ -247,17 +244,15 @@ async function ingestCandidate(
         );
     } else {
         const download = await fetchFn(artifactUrl, {
-            headers: apiHeaders(token),
+            headers: githubApiHeaders(token),
             redirect: 'follow',
             signal: deps.signal,
         });
-        if (!download.ok || !download.body) {
-            const detail = await download.text().catch(() => '');
-            throw new Error(
-                `artifact download failed: ${download.status} ${
-                    detail.slice(0, 500)
-                }`,
-            );
+        if (!download.ok) {
+            throw await githubHttpError('GitHub artifact download', download);
+        }
+        if (!download.body) {
+            throw new Error('GitHub artifact download returned no body');
         }
         result = await (deps.ingestFn
             ? deps.ingestFn(download.body, 'helium', releaseTag, kind)
@@ -269,9 +264,6 @@ async function ingestCandidate(
                 deps.db,
             ));
     }
-    if (!result.filesExtracted || result.filesExtracted < 1) {
-        throw new Error('symbol upload extracted no files');
-    }
 
     logEvent('artifact_crawler_ingested', {
         repo,
@@ -279,8 +271,8 @@ async function ingestCandidate(
         artifact_id: artifact.id,
         artifact: artifact.name,
         files_extracted: result.filesExtracted,
-        debug_ids: result.debugIds?.length ?? 0,
-        requeued: result.requeued ?? 0,
+        debug_ids: result.debugIds.length,
+        requeued: result.requeued,
     });
 }
 
@@ -394,6 +386,7 @@ export async function crawlArtifactsOnce(
                         });
                         return;
                     }
+
                     const failed = attempts >= MAX_ATTEMPTS;
                     db.markArtifactError(
                         repo,
@@ -426,13 +419,9 @@ export async function crawlArtifactsOnce(
     }
 }
 
-export interface ArtifactCrawlerHandle {
-    stop(): Promise<void>;
-}
-
 export function startArtifactCrawler(
     deps: Omit<ArtifactCrawlerDeps, 'signal'>,
-): ArtifactCrawlerHandle {
+) {
     if (!deps.config.githubArtifactToken) {
         logEvent('artifact_crawler_disabled', {
             reason: 'GITHUB_ARTIFACT_TOKEN is not set',
@@ -440,30 +429,25 @@ export function startArtifactCrawler(
         return { stop: () => Promise.resolve() };
     }
 
-    let stopped = false;
-    let wake: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const abort = new AbortController();
+    const { signal } = abort;
     const loop = (async () => {
-        while (!stopped) {
+        while (!signal.aborted) {
             try {
-                await crawlArtifactsOnce({ ...deps, signal: abort.signal });
+                await crawlArtifactsOnce({ ...deps, signal });
             } catch (err) {
-                if (!stopped) {
+                if (!signal.aborted) {
                     logError('artifact_crawler_error', err);
                 }
             }
 
-            if (stopped) {
-                break;
-            }
-
-            await new Promise<void>((resolve) => {
-                wake = resolve;
-                timer = setTimeout(resolve, deps.config.artifactCrawlerPollMs);
+            await delay(
+                deps.config.artifactCrawlerPollMs,
+                undefined,
+                { signal },
+            ).catch((err) => {
+                if (!signal.aborted) throw err;
             });
-            wake = undefined;
-            timer = undefined;
         }
     })();
 
@@ -475,12 +459,9 @@ export function startArtifactCrawler(
     });
 
     return {
-        async stop() {
-            stopped = true;
+        stop() {
             abort.abort();
-            if (timer !== undefined) clearTimeout(timer);
-            wake?.();
-            await loop;
+            return loop;
         },
     };
 }

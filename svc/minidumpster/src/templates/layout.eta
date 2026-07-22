@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><%= it.title %> · minidumpster</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
-  <h1><a href="/">minidumpster</a></h1>
+  <a class="brand" href="/" aria-label="minidumpster"><img src="/static/favicon.svg" alt=""></a>
   <% if (!it.section || it.section === 'reports') { %>
   <span class="muted">crash reports</span>
   <% } else { %><a href="/">crash reports</a><% } %>
@@ -26,16 +27,6 @@
   <% } %>
 </header>
 <%~ it.body %>
-<script>
-document.addEventListener('click', (e) => {
-  const t = e.target.closest('.expandable');
-  if (!t) {
-    return;
-  }
-  const full = t.dataset.full;
-  t.dataset.full = t.textContent;
-  t.textContent = full;
-});
-</script>
+<script src="/static/app.js" defer></script>
 </body>
 </html>

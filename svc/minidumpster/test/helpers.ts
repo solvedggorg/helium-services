@@ -1,6 +1,14 @@
 import type { Config } from '../src/config.ts';
 import { Db } from '../src/db.ts';
 import { dbPath, ensureDataDirs } from '../src/paths.ts';
+import { encodeSession } from '../src/session.ts';
+import { serializeSigned } from 'hono/utils/cookie';
+import {
+    BlobWriter,
+    TextReader,
+    Uint8ArrayReader,
+    ZipWriter,
+} from '@zip-js/zip-js';
 
 export function testConfig(
     dataDir: string,
@@ -31,6 +39,69 @@ export function testConfig(
             .raw`(?:^|[-_.])(symbols?|symbolicated|debug(?:-?symbols?)?|dsym|pdb)(?:$|[-_.])`,
         ...over,
     };
+}
+
+export function minimalMinidump(): Uint8Array {
+    const dump = new Uint8Array(32);
+    dump.set([0x4d, 0x44, 0x4d, 0x50]);
+    return dump;
+}
+
+/** Re-stream bytes in small chunks so parsers cannot rely on chunk boundaries. */
+export function chunked(
+    bytes: Uint8Array,
+    size: number,
+): ReadableStream<Uint8Array> {
+    let offset = 0;
+    return new ReadableStream({
+        pull(controller) {
+            if (offset >= bytes.byteLength) {
+                controller.close();
+                return;
+            }
+            controller.enqueue(bytes.slice(offset, offset + size));
+            offset += size;
+        },
+    });
+}
+
+export async function dirEntries(path: string): Promise<string[]> {
+    const entries: string[] = [];
+    for await (const entry of Deno.readDir(path)) {
+        entries.push(entry.name);
+    }
+    return entries;
+}
+
+export async function makeZip(
+    entries: [string, Uint8Array | string][],
+    level?: number,
+): Promise<Uint8Array> {
+    const writer = new ZipWriter(new BlobWriter('application/zip'));
+    for (const [name, data] of entries) {
+        await writer.add(
+            name,
+            typeof data === 'string'
+                ? new TextReader(data)
+                : new Uint8ArrayReader(data),
+            level === undefined ? {} : { level },
+        );
+    }
+    return new Uint8Array(await (await writer.close()).arrayBuffer());
+}
+
+export async function testSessionCookie(env: TestEnv): Promise<string> {
+    const now = Date.now();
+    const value = encodeSession({
+        login: 'jj',
+        exp: now + 60_000,
+    });
+    const cookie = await serializeSigned(
+        'session',
+        value,
+        env.config.sessionSecret,
+    );
+    return cookie.split(';')[0];
 }
 
 export interface TestEnv {

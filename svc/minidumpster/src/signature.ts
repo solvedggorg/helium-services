@@ -91,7 +91,7 @@ function moduleFor(
     }) ?? null;
 }
 
-export function frameLabel(f: SymFrame, modules?: SymModule[]): string {
+function frameLabel(f: SymFrame, modules?: SymModule[]): string {
     const fn = f.function ?? f.symbol;
     if (fn && fn.trim() !== '') {
         return fn.trim().replace(/\s+/g, ' ');
@@ -177,14 +177,12 @@ function skipSentinelFrames(frames: SymFrame[]): SymFrame[] {
 }
 
 async function sha256Hex(text: string): Promise<string> {
-    const digest = await crypto.subtle.digest(
-        'SHA-256',
-        new TextEncoder().encode(text),
-    );
-
-    return Array.from(new Uint8Array(digest)).map((b) =>
-        b.toString(16).padStart(2, '0')
-    ).join('');
+    return new Uint8Array(
+        await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(text),
+        ),
+    ).toHex();
 }
 
 export async function computeSignature(
@@ -218,15 +216,7 @@ export async function fallbackSignature(
     resp: SymbolicatorResponse,
 ): Promise<SignatureResult> {
     const reason = resp.crash_reason?.trim() || 'no stacktrace';
-
-    const digest = await crypto.subtle.digest(
-        'SHA-256',
-        new TextEncoder().encode(`reason:${reason}`),
-    );
-    const signature = Array.from(new Uint8Array(digest)).map((b) =>
-        b.toString(16).padStart(2, '0')
-    )
-        .join('');
+    const signature = await sha256Hex(`reason:${reason}`);
 
     return { signature, title: reason, symbolicated: false };
 }

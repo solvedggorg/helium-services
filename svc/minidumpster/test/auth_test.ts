@@ -7,21 +7,23 @@ import { decodeSession, encodeSession } from '../src/session.ts';
 
 Deno.test('session payloads round-trip and reject malformed/expired values', () => {
     const now = Date.now();
-    const ok = decodeSession(
-        encodeSession({ login: 'jj', exp: now + 60_000 }),
-        now,
-    );
+    const valid = {
+        login: 'jj',
+        exp: now + 60_000,
+    };
+    const ok = decodeSession(encodeSession(valid), now);
     assert(ok);
     assertEquals(ok.login, 'jj');
 
-    assertEquals(decodeSession(undefined, now), null);
-    assertEquals(decodeSession(false, now), null);
-    assertEquals(decodeSession('not json', now), null);
-    assertEquals(decodeSession(JSON.stringify({ login: 'jj' }), now), null);
-    assertEquals(
-        decodeSession(encodeSession({ login: 'jj', exp: now - 1 }), now),
-        null,
-    );
+    const rejects = (
+        value: Parameters<typeof decodeSession>[0],
+        at = now,
+    ) => assertEquals(decodeSession(value, at), null);
+    rejects(undefined);
+    rejects(false);
+    rejects('not json');
+    rejects(JSON.stringify({ login: 'jj' }));
+    rejects(encodeSession({ ...valid, exp: now - 1 }));
 });
 
 /** Mock of the GitHub endpoints hit during login (middleware + org gate). */
@@ -126,6 +128,9 @@ Deno.test('OAuth callback grants a session to active org members', async () => {
             assertEquals(res.headers.get('location'), '/');
             const setCookie = res.headers.get('set-cookie') ?? '';
             assert(setCookie.includes('session='));
+            assert(setCookie.includes('Max-Age=604800'));
+            assert(setCookie.includes('HttpOnly'));
+            assert(setCookie.includes('SameSite=Lax'));
 
             // The issued (signed) session cookie opens the UI.
             const sessionValue = /session=([^;]+)/.exec(setCookie)![1];
@@ -133,7 +138,20 @@ Deno.test('OAuth callback grants a session to active org members', async () => {
                 headers: { cookie: `session=${sessionValue}` },
             });
             assertEquals(home.status, 200);
-            assert((await home.text()).includes('minidumpster'));
+            assertEquals(
+                home.headers.get('content-security-policy')?.includes(
+                    "script-src 'self' 'unsafe-inline'",
+                ),
+                false,
+            );
+            const homeHtml = await home.text();
+            assert(homeHtml.includes('minidumpster'));
+            assert(
+                homeHtml.includes(
+                    '<script src="/static/app.js" defer></script>',
+                ),
+            );
+            assertEquals(homeHtml.includes('<script>'), false);
 
             env.db.registerArtifact(
                 'imputnet/helium-windows',
@@ -233,18 +251,51 @@ Deno.test('UI routes redirect to login without a session', async () => {
     }
 });
 
-Deno.test('the stylesheet is served without a session', async () => {
+Deno.test('shared page assets are served without a session', async () => {
     const env = await makeTestEnv();
     try {
         const app = buildApp({ config: env.config, db: env.db });
 
-        const res = await app.request('/style.css');
+        const res = await app.request('/static/style.css');
         assertEquals(res.status, 200);
+        assertEquals(res.headers.get('x-content-type-options'), 'nosniff');
+        assert(
+            (res.headers.get('content-security-policy') ?? '').includes(
+                "default-src 'none'",
+            ),
+        );
+        assert(
+            (res.headers.get('content-security-policy') ?? '').includes(
+                "script-src 'self'",
+            ),
+        );
+        assertEquals(
+            res.headers.get('content-security-policy')?.includes(
+                "script-src 'self' 'unsafe-inline'",
+            ),
+            false,
+        );
         assertEquals(
             res.headers.get('content-type'),
             'text/css; charset=utf-8',
         );
         assert((await res.text()).includes('.expandable'));
+
+        const favicon = await app.request('/static/favicon.svg');
+        assertEquals(favicon.status, 200);
+        assertEquals(
+            favicon.headers.get('content-type'),
+            'image/svg+xml; charset=utf-8',
+        );
+        assert((await favicon.text()).startsWith('<svg'));
+
+        const script = await app.request('/static/app.js');
+        assertEquals(script.status, 200);
+        assertEquals(
+            script.headers.get('content-type'),
+            'text/javascript; charset=utf-8',
+        );
+        assert((await script.text()).includes('addEventListener'));
 
         // Everything else stays gated.
         const page = await app.request('/');

@@ -94,6 +94,7 @@ export function requireSession(config: Config): MiddlewareHandler<Env> {
         const raw = await getSignedCookie(c, config.sessionSecret, 'session');
         const session = decodeSession(raw);
         if (!session) {
+            c.header('cache-control', 'no-store');
             return c.redirect('/auth/login');
         }
 

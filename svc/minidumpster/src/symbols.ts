@@ -9,6 +9,7 @@ import { symbolsDir, tmpDir } from './paths.ts';
 import { streamMultipartToDisk } from './multipart.ts';
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const SYMSORTER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 export interface SymbolIngestResult {
     ok: true;
@@ -38,47 +39,63 @@ function bearerToken(req: Request): string | null {
     return m ? m[1].trim() : null;
 }
 
+function requireValidNames(product: string, version: string): void {
+    for (const [field, value] of [['product', product], ['version', version]]) {
+        if (!NAME_RE.test(value)) {
+            throw new HttpError(
+                400,
+                `missing or invalid '${field}' (query param or multipart field)`,
+            );
+        }
+    }
+}
+
 async function streamToFile(
     stream: ReadableStream<Uint8Array>,
     path: string,
-): Promise<number> {
-    const f = await Deno.open(path, {
+): Promise<void> {
+    const file = await Deno.open(path, {
         write: true,
         create: true,
         truncate: true,
+        mode: 0o600,
     });
-
-    let size = 0;
-    try {
-        for await (const chunk of stream) {
-            let off = 0;
-            while (off < chunk.length) {
-                off += await f.write(chunk.subarray(off));
-            }
-            size += chunk.length;
-        }
-    } finally {
-        f.close();
-    }
-
-    return size;
+    await stream.pipeTo(file.writable);
 }
 
 async function runSymsorter(
     bin: string,
     args: string[],
+    timeoutMs: number,
 ): Promise<{ code: number; output: string }> {
     const proc = new Deno.Command(bin, {
         args,
         stdout: 'piped',
         stderr: 'piped',
-    });
+    }).spawn();
 
-    const res = await proc.output();
-    const output = new TextDecoder().decode(res.stdout)
-        + new TextDecoder().decode(res.stderr);
-
-    return { code: res.code, output };
+    let timedOut = false;
+    const timer = setTimeout(() => {
+        timedOut = true;
+        try {
+            proc.kill('SIGKILL');
+        } catch {
+            // Process already exited.
+        }
+    }, timeoutMs);
+    try {
+        const { code, stdout, stderr } = await proc.output();
+        if (timedOut) {
+            throw new Error(`symsorter exceeded timeout of ${timeoutMs}ms`);
+        }
+        return {
+            code,
+            output: new TextDecoder().decode(stdout)
+                + new TextDecoder().decode(stderr),
+        };
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function sortSymbolDirectory(
@@ -90,10 +107,6 @@ async function sortSymbolDirectory(
     opts: SymbolsOptions,
     sourceBytes?: number,
 ): Promise<SymbolIngestResult> {
-    if (!NAME_RE.test(product) || !NAME_RE.test(version)) {
-        throw new HttpError(400, 'invalid symbol product or version');
-    }
-
     logEvent('symbols_extracted', {
         product,
         version,
@@ -106,15 +119,28 @@ async function sortSymbolDirectory(
     // <id[:2]>/<id[2:]>/<type> relative to the source root, so a product
     // prefix directory would make every lookup miss. Debug IDs are globally
     // unique. The bundle id tags this upload for retention bookkeeping.
-    const sorted = await runSymsorter(bin, [
-        '--output',
-        symbolsDir(config.dataDir),
-        '--bundle-id',
-        `${product}-${version}`,
-        inputDir,
-    ]).catch(() => {
-        throw new HttpError(500, 'symsorter is not installed on the server');
-    });
+    let sorted: { code: number; output: string };
+    try {
+        sorted = await runSymsorter(
+            bin,
+            [
+                '--output',
+                symbolsDir(config.dataDir),
+                '--bundle-id',
+                `${product}-${version}`,
+                inputDir,
+            ],
+            SYMSORTER_TIMEOUT_MS,
+        );
+    } catch (err) {
+        if (err instanceof Deno.errors.NotFound) {
+            throw new HttpError(
+                500,
+                'symsorter is not installed on the server',
+            );
+        }
+        throw err;
+    }
     if (sorted.code !== 0) {
         throw new HttpError(
             500,
@@ -152,18 +178,7 @@ async function processSymbolZip(
     config: Config,
     opts: SymbolsOptions,
 ): Promise<SymbolIngestResult> {
-    if (!NAME_RE.test(product)) {
-        throw new HttpError(
-            400,
-            "missing or invalid 'product' (query param or multipart field)",
-        );
-    }
-    if (!NAME_RE.test(version)) {
-        throw new HttpError(
-            400,
-            "missing or invalid 'version' (query param or multipart field)",
-        );
-    }
+    requireValidNames(product, version);
 
     const stat = await Deno.stat(zipPath).catch(() => null);
     if (!stat || stat.size === 0) {
@@ -177,7 +192,7 @@ async function processSymbolZip(
     });
 
     const extractDir = join(workDir, 'extracted');
-    await Deno.mkdir(extractDir);
+    await Deno.mkdir(extractDir, { mode: 0o700 });
 
     let filesExtracted: number;
     try {
@@ -194,7 +209,7 @@ async function processSymbolZip(
         throw new HttpError(400, 'zip archive contains no files');
     }
 
-    return await sortSymbolDirectory(
+    return sortSymbolDirectory(
         extractDir,
         product,
         version,
@@ -205,15 +220,16 @@ async function processSymbolZip(
     );
 }
 
-export async function handleSymbolUpload(
+async function handleSymbolUpload(
     req: Request,
     config: Config,
-    opts: SymbolsOptions = {},
+    opts: SymbolsOptions,
 ): Promise<SymbolIngestResult> {
     if (bearerToken(req) !== config.symbolUploadToken) {
         throw new HttpError(401, 'missing or invalid bearer token');
     }
-    if (!req.body) {
+    const body = req.body;
+    if (!body) {
         throw new HttpError(400, 'empty request body');
     }
 
@@ -238,14 +254,14 @@ export async function handleSymbolUpload(
         const contentType = req.headers.get('content-type') ?? '';
         if (contentType.toLowerCase().includes('multipart/form-data')) {
             const parsed = await streamMultipartToDisk(
-                req.body,
+                body,
                 contentType,
                 () => zipPath,
             ).catch((e) => {
-                throw new HttpError(
-                    400,
-                    e instanceof Error ? e.message : 'malformed multipart body',
-                );
+                const message = e instanceof Error
+                    ? e.message
+                    : 'malformed multipart body';
+                throw new HttpError(400, message);
             });
 
             product = parsed.fields['product'] || product;
@@ -254,7 +270,7 @@ export async function handleSymbolUpload(
                 throw new HttpError(400, 'no file part in multipart body');
             }
         } else {
-            await streamToFile(req.body, zipPath);
+            await streamToFile(body, zipPath);
         }
 
         return await processSymbolZip(
@@ -298,6 +314,7 @@ export async function ingestSymbolDirectory(
     db: Db,
     opts: SymbolsOptions = {},
 ): Promise<SymbolIngestAndRequeueResult> {
+    requireValidNames(product, version);
     if (filesExtracted < 1) {
         throw new HttpError(400, 'artifact contains no matching symbol files');
     }
@@ -357,3 +374,5 @@ export async function ingestSymbolUpload(
     const result = await handleSymbolUpload(req, config, opts);
     return requeueSymbolResult(result, db);
 }
+
+export const _test = { runSymsorter };

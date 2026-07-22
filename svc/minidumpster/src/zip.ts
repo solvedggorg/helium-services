@@ -3,7 +3,7 @@ import { configure, Reader, ZipReader } from '@zip-js/zip-js';
 
 configure({ useWebWorkers: false });
 
-class DenoFileReader extends Reader<Deno.FsFile> {
+export class DenoFileReader extends Reader<Deno.FsFile> {
     constructor(private file: Deno.FsFile) {
         super(file);
     }

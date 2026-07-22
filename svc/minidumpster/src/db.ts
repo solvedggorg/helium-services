@@ -19,7 +19,6 @@ export interface ReportRow {
     next_attempt_at: number;
     received_at: number;
     processed_at: number | null;
-    dump_deleted: number;
     kind: ReportKind;
     symbolicated: number;
 }
@@ -92,11 +91,11 @@ CREATE TABLE IF NOT EXISTS reports (
   next_attempt_at INTEGER NOT NULL DEFAULT 0,
   received_at INTEGER NOT NULL,
   processed_at INTEGER,
-  dump_deleted INTEGER NOT NULL DEFAULT 0,
   kind TEXT NOT NULL DEFAULT 'minidump',
   symbolicated INTEGER NOT NULL DEFAULT 1
 );
-CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
+CREATE INDEX IF NOT EXISTS idx_reports_queue
+  ON reports(status, next_attempt_at, received_at);
 CREATE INDEX IF NOT EXISTS idx_reports_group ON reports(group_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_reports_prod_ver ON reports(product, version);
 CREATE TABLE IF NOT EXISTS groups (
@@ -121,6 +120,24 @@ CREATE TABLE IF NOT EXISTS artifact_ingests (
 );
 `;
 
+function migrateSchema(db: DatabaseSync): void {
+    // Replaced by idx_reports_queue in databases created before it.
+    db.exec('DROP INDEX IF EXISTS idx_reports_status');
+
+    const legacyColumn = db.prepare(`
+        SELECT 1
+        FROM pragma_table_info('reports')
+        WHERE name = 'dump_deleted'
+        LIMIT 1
+    `).get();
+
+    if (!legacyColumn) {
+        return;
+    }
+
+    db.exec('ALTER TABLE reports DROP COLUMN dump_deleted');
+}
+
 export class Db {
     private db: DatabaseSync;
 
@@ -129,6 +146,7 @@ export class Db {
         this.db.exec('PRAGMA journal_mode = WAL;');
         this.db.exec('PRAGMA busy_timeout = 5000;');
         this.db.exec(SCHEMA);
+        migrateSchema(this.db);
     }
 
     private one<T extends object>(
@@ -140,6 +158,18 @@ export class Db {
 
     private many<T extends object>(sql: string, ...params: SqlParam[]): T[] {
         return this.db.prepare(sql).all(...params) as T[];
+    }
+
+    private inWriteTransaction<T>(fn: () => T): T {
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+            const result = fn();
+            this.db.exec('COMMIT');
+            return result;
+        } catch (err) {
+            this.db.exec('ROLLBACK');
+            throw err;
+        }
     }
 
     close(): void {
@@ -182,8 +212,8 @@ export class Db {
 
         return this.many<ReportRow>(
             `SELECT * FROM reports
-       WHERE lower(id) = ? OR lower(guid) = ?
-          OR lower(id) LIKE ? OR lower(guid) LIKE ?
+       WHERE id = ? OR lower(guid) = ?
+          OR id LIKE ? OR lower(guid) LIKE ?
        ORDER BY received_at DESC LIMIT ?`,
             q,
             q,
@@ -193,28 +223,17 @@ export class Db {
         );
     }
 
-    claimPending(limit: number, now: number): ReportRow[] {
-        this.db.exec('BEGIN IMMEDIATE');
-        try {
-            const rows = this.many<ReportRow>(
-                `SELECT * FROM reports WHERE status = 'pending' AND next_attempt_at <= ?
-         ORDER BY received_at LIMIT ?`,
-                now,
-                limit,
-            );
-            const upd = this.db.prepare(
-                `UPDATE reports SET status = 'processing' WHERE id = ?`,
-            );
-            for (const row of rows) {
-                upd.run(row.id);
-            }
-
-            this.db.exec('COMMIT');
-            return rows;
-        } catch (e) {
-            this.db.exec('ROLLBACK');
-            throw e;
-        }
+    claimNext(now: number): ReportRow | null {
+        return this.one<ReportRow>(
+            `UPDATE reports SET status = 'processing'
+       WHERE id IN (
+         SELECT id FROM reports
+         WHERE status = 'pending' AND next_attempt_at <= ?
+         ORDER BY received_at LIMIT 1
+       )
+       RETURNING *`,
+            now,
+        );
     }
 
     resetProcessing(): number {
@@ -231,11 +250,19 @@ export class Db {
         platform: string | null,
         processedAt: number,
         symbolicated: boolean,
+        attempts: number,
     ): void {
         this.db.prepare(
-            `UPDATE reports SET status = 'processed', group_id = ?, platform = ?, processed_at = ?, symbolicated = ?, error = NULL
+            `UPDATE reports SET status = 'processed', group_id = ?, platform = ?, processed_at = ?, symbolicated = ?, attempts = ?, next_attempt_at = 0, error = NULL
        WHERE id = ?`,
-        ).run(groupId, platform, processedAt, symbolicated ? 1 : 0, id);
+        ).run(
+            groupId,
+            platform,
+            processedAt,
+            symbolicated ? 1 : 0,
+            attempts,
+            id,
+        );
     }
 
     requeueUnsymbolicated(
@@ -261,12 +288,6 @@ export class Db {
         this.db.prepare(
             `UPDATE reports SET status = 'pending', error = ?, attempts = ?, next_attempt_at = ? WHERE id = ?`,
         ).run(error, attempts, nextAttemptAt, id);
-    }
-
-    markFailed(id: string, error: string, attempts: number): void {
-        this.db.prepare(
-            `UPDATE reports SET status = 'failed', error = ?, attempts = ? WHERE id = ?`,
-        ).run(error, attempts, id);
     }
 
     registerArtifact(
@@ -470,16 +491,29 @@ export class Db {
         };
     }
 
-    dumpsOlderThan(cutoffMs: number): string[] {
-        return this.many<{ id: string }>(
-            `SELECT id FROM reports WHERE received_at < ? AND dump_deleted = 0`,
-            cutoffMs,
-        ).map((r) => r.id);
+    deleteExpiredReports(cutoffMs: number): string[] {
+        return this.inWriteTransaction(() => {
+            const expiredReports = this.many<{
+                id: string;
+                group_id: number | null;
+            }>(
+                `DELETE FROM reports
+         WHERE received_at < ? AND status <> 'processing'
+         RETURNING id, group_id`,
+                cutoffMs,
+            );
+            this.recountGroups(expiredReports.map((report) => report.group_id));
+            return expiredReports.map((report) => report.id);
+        });
     }
 
-    markDumpDeleted(id: string): void {
-        this.db.prepare(`UPDATE reports SET dump_deleted = 1 WHERE id = ?`).run(
-            id,
-        );
+    deleteReport(id: string): void {
+        this.inWriteTransaction(() => {
+            const groupId = this.one<{ group_id: number | null }>(
+                `DELETE FROM reports WHERE id = ? RETURNING group_id`,
+                id,
+            )?.group_id ?? null;
+            this.recountGroups([groupId]);
+        });
     }
 }

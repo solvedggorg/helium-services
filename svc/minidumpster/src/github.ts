@@ -1,3 +1,12 @@
+export function githubApiHeaders(token: string): Record<string, string> {
+    return {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'minidumpster',
+    };
+}
+
 export async function checkOrgMembership(
     fetchFn: typeof fetch,
     token: string,
@@ -7,13 +16,7 @@ export async function checkOrgMembership(
         `https://api.github.com/user/memberships/orgs/${
             encodeURIComponent(org)
         }`,
-        {
-            headers: {
-                Accept: 'application/vnd.github+json',
-                'User-Agent': 'minidumpster-crash-service',
-                Authorization: `Bearer ${token}`,
-            },
-        },
+        { headers: githubApiHeaders(token) },
     );
 
     if (!res.ok) {

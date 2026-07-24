@@ -178,8 +178,11 @@ export class Db {
 
     insertReport(r: NewReport): void {
         this.db.prepare(
-            `INSERT INTO reports (id, product, version, guid, ptype, channel, annotations, status, received_at, kind)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            `INSERT INTO reports (
+                 id, product, version, guid, ptype, channel,
+                 annotations, status, received_at, kind
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         ).run(
             r.id,
             r.product,
@@ -199,7 +202,11 @@ export class Db {
 
     findReportByGuid(guid: string): ReportRow | null {
         return this.one<ReportRow>(
-            `SELECT * FROM reports WHERE guid = ? ORDER BY received_at DESC LIMIT 1`,
+            `SELECT *
+             FROM reports
+             WHERE guid = ?
+             ORDER BY received_at DESC
+             LIMIT 1`,
             guid,
         );
     }
@@ -211,10 +218,14 @@ export class Db {
         }
 
         return this.many<ReportRow>(
-            `SELECT * FROM reports
-       WHERE id = ? OR lower(guid) = ?
-          OR id LIKE ? OR lower(guid) LIKE ?
-       ORDER BY received_at DESC LIMIT ?`,
+            `SELECT *
+             FROM reports
+             WHERE id = ?
+                OR lower(guid) = ?
+                OR id LIKE ?
+                OR lower(guid) LIKE ?
+             ORDER BY received_at DESC
+             LIMIT ?`,
             q,
             q,
             `${q}%`,
@@ -225,20 +236,26 @@ export class Db {
 
     claimNext(now: number): ReportRow | null {
         return this.one<ReportRow>(
-            `UPDATE reports SET status = 'processing'
-       WHERE id IN (
-         SELECT id FROM reports
-         WHERE status = 'pending' AND next_attempt_at <= ?
-         ORDER BY received_at LIMIT 1
-       )
-       RETURNING *`,
+            `UPDATE reports
+             SET status = 'processing'
+             WHERE id IN (
+                 SELECT id
+                 FROM reports
+                 WHERE status = 'pending'
+                   AND next_attempt_at <= ?
+                 ORDER BY received_at
+                 LIMIT 1
+             )
+             RETURNING *`,
             now,
         );
     }
 
     resetProcessing(): number {
         const res = this.db.prepare(
-            `UPDATE reports SET status = 'pending' WHERE status = 'processing'`,
+            `UPDATE reports
+             SET status = 'pending'
+             WHERE status = 'processing'`,
         ).run();
 
         return Number(res.changes);
@@ -253,8 +270,11 @@ export class Db {
         attempts: number,
     ): void {
         this.db.prepare(
-            `UPDATE reports SET status = 'processed', group_id = ?, platform = ?, processed_at = ?, symbolicated = ?, attempts = ?, next_attempt_at = 0, error = NULL
-       WHERE id = ?`,
+            `UPDATE reports
+             SET status = 'processed', group_id = ?, platform = ?,
+                 processed_at = ?, symbolicated = ?, attempts = ?,
+                 next_attempt_at = 0, error = NULL
+             WHERE id = ?`,
         ).run(
             groupId,
             platform,
@@ -271,9 +291,13 @@ export class Db {
         notBefore: number,
     ): number {
         const res = this.db.prepare(
-            `UPDATE reports SET status = 'pending', attempts = 0, next_attempt_at = ?, error = NULL
-       WHERE status = 'processed' AND symbolicated = 0
-         AND product = ? COLLATE NOCASE AND version = ?`,
+            `UPDATE reports
+             SET status = 'pending', attempts = 0,
+                 next_attempt_at = ?, error = NULL
+             WHERE status = 'processed'
+               AND symbolicated = 0
+               AND product = ? COLLATE NOCASE
+               AND version = ?`,
         ).run(notBefore, product, version);
 
         return Number(res.changes);
@@ -286,7 +310,10 @@ export class Db {
         nextAttemptAt: number,
     ): void {
         this.db.prepare(
-            `UPDATE reports SET status = 'pending', error = ?, attempts = ?, next_attempt_at = ? WHERE id = ?`,
+            `UPDATE reports
+             SET status = 'pending', error = ?, attempts = ?,
+                 next_attempt_at = ?
+             WHERE id = ?`,
         ).run(error, attempts, nextAttemptAt, id);
     }
 
@@ -309,11 +336,13 @@ export class Db {
         artifactName: string,
     ): ArtifactIngestRow {
         this.db.prepare(
-            `INSERT INTO artifact_ingests (repo, artifact_id, release_tag, artifact_name)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(repo, artifact_id) DO UPDATE SET
-         release_tag = excluded.release_tag,
-         artifact_name = excluded.artifact_name`,
+            `INSERT INTO artifact_ingests (
+                 repo, artifact_id, release_tag, artifact_name
+             )
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(repo, artifact_id) DO UPDATE
+             SET release_tag = excluded.release_tag,
+                 artifact_name = excluded.artifact_name`,
         ).run(repo, artifactId, releaseTag, artifactName);
 
         return this.getArtifactIngest(repo, artifactId)!;
@@ -324,7 +353,10 @@ export class Db {
         artifactId: number,
     ): ArtifactIngestRow | null {
         return this.one<ArtifactIngestRow>(
-            `SELECT * FROM artifact_ingests WHERE repo = ? AND artifact_id = ?`,
+            `SELECT *
+             FROM artifact_ingests
+             WHERE repo = ?
+               AND artifact_id = ?`,
             repo,
             artifactId,
         );
@@ -332,9 +364,11 @@ export class Db {
 
     listArtifactIngests(limit = 500): ArtifactIngestRow[] {
         return this.many<ArtifactIngestRow>(
-            `SELECT * FROM artifact_ingests
-       ORDER BY COALESCE(ingested_at, next_attempt_at) DESC, artifact_id DESC
-       LIMIT ?`,
+            `SELECT *
+             FROM artifact_ingests
+             ORDER BY COALESCE(ingested_at, next_attempt_at) DESC,
+                      artifact_id DESC
+             LIMIT ?`,
             limit,
         );
     }
@@ -347,9 +381,10 @@ export class Db {
     ): void {
         this.db.prepare(
             `UPDATE artifact_ingests
-       SET status = 'ingested', attempts = ?, next_attempt_at = 0,
-           error = NULL, ingested_at = ?
-       WHERE repo = ? AND artifact_id = ?`,
+             SET status = 'ingested', attempts = ?, next_attempt_at = 0,
+                 error = NULL, ingested_at = ?
+             WHERE repo = ?
+               AND artifact_id = ?`,
         ).run(attempts, ingestedAt, repo, artifactId);
     }
 
@@ -363,8 +398,9 @@ export class Db {
     ): void {
         this.db.prepare(
             `UPDATE artifact_ingests
-       SET status = ?, attempts = ?, next_attempt_at = ?, error = ?
-       WHERE repo = ? AND artifact_id = ?`,
+             SET status = ?, attempts = ?, next_attempt_at = ?, error = ?
+             WHERE repo = ?
+               AND artifact_id = ?`,
         ).run(
             failed ? 'failed' : 'pending',
             attempts,
@@ -377,11 +413,13 @@ export class Db {
 
     upsertGroup(signature: string, title: string, seenAt: number): number {
         const row = this.one<{ id: number }>(
-            `INSERT INTO groups (signature, title, first_seen, last_seen, report_count)
-       VALUES (?, ?, ?, ?, 0)
-       ON CONFLICT(signature) DO UPDATE SET
-         last_seen = MAX(last_seen, excluded.last_seen)
-       RETURNING id`,
+            `INSERT INTO groups (
+                 signature, title, first_seen, last_seen, report_count
+             )
+             VALUES (?, ?, ?, ?, 0)
+             ON CONFLICT(signature) DO UPDATE
+             SET last_seen = MAX(last_seen, excluded.last_seen)
+             RETURNING id`,
             signature,
             title,
             seenAt,
@@ -397,12 +435,18 @@ export class Db {
 
     recountGroups(ids: (number | null)[]): void {
         const recount = this.db.prepare(
-            `UPDATE groups SET report_count =
-         (SELECT COUNT(*) FROM reports r WHERE r.group_id = groups.id)
-       WHERE id = ?`,
+            `UPDATE groups
+             SET report_count = (
+                 SELECT COUNT(*)
+                 FROM reports r
+                 WHERE r.group_id = groups.id
+             )
+             WHERE id = ?`,
         );
         const prune = this.db.prepare(
-            `DELETE FROM groups WHERE id = ? AND report_count = 0`,
+            `DELETE FROM groups
+             WHERE id = ?
+               AND report_count = 0`,
         );
 
         for (const id of new Set(ids)) {
@@ -425,19 +469,34 @@ export class Db {
 
         if (filter.product) {
             conds.push(
-                `EXISTS (SELECT 1 FROM reports r WHERE r.group_id = g.id AND r.product = ?)`,
+                `EXISTS (
+                     SELECT 1
+                     FROM reports r
+                     WHERE r.group_id = g.id
+                       AND r.product = ?
+                 )`,
             );
             params.push(filter.product);
         }
         if (filter.version) {
             conds.push(
-                `EXISTS (SELECT 1 FROM reports r WHERE r.group_id = g.id AND r.version = ?)`,
+                `EXISTS (
+                     SELECT 1
+                     FROM reports r
+                     WHERE r.group_id = g.id
+                       AND r.version = ?
+                 )`,
             );
             params.push(filter.version);
         }
         if (filter.platform) {
             conds.push(
-                `EXISTS (SELECT 1 FROM reports r WHERE r.group_id = g.id AND r.platform = ?)`,
+                `EXISTS (
+                     SELECT 1
+                     FROM reports r
+                     WHERE r.group_id = g.id
+                       AND r.platform = ?
+                 )`,
             );
             params.push(filter.platform);
         }
@@ -447,21 +506,44 @@ export class Db {
             ? 'g.last_seen DESC'
             : 'g.report_count DESC';
 
-        const sql = `
-      SELECT g.*,
-        (SELECT GROUP_CONCAT(DISTINCT r.product) FROM reports r WHERE r.group_id = g.id) AS products,
-        (SELECT GROUP_CONCAT(DISTINCT r.version) FROM reports r WHERE r.group_id = g.id) AS versions,
-        (SELECT GROUP_CONCAT(DISTINCT r.platform) FROM reports r WHERE r.group_id = g.id AND r.platform IS NOT NULL) AS platforms,
-        (SELECT COUNT(*) FROM reports r WHERE r.group_id = g.id AND r.symbolicated = 0) AS unsymbolicated
-      FROM groups g ${where}
-      ORDER BY ${order} LIMIT 500`;
+        const sql = `SELECT g.*,
+                    (
+                        SELECT GROUP_CONCAT(DISTINCT r.product)
+                        FROM reports r
+                        WHERE r.group_id = g.id
+                    ) AS products,
+                    (
+                        SELECT GROUP_CONCAT(DISTINCT r.version)
+                        FROM reports r
+                        WHERE r.group_id = g.id
+                    ) AS versions,
+                    (
+                        SELECT GROUP_CONCAT(DISTINCT r.platform)
+                        FROM reports r
+                        WHERE r.group_id = g.id
+                          AND r.platform IS NOT NULL
+                    ) AS platforms,
+                    (
+                        SELECT COUNT(*)
+                        FROM reports r
+                        WHERE r.group_id = g.id
+                          AND r.symbolicated = 0
+                    ) AS unsymbolicated
+             FROM groups g
+             ${where}
+             ORDER BY ${order}
+             LIMIT 500`;
 
         return this.many<GroupListRow>(sql, ...params);
     }
 
     reportsForGroup(groupId: number, limit = 50): ReportRow[] {
         return this.many<ReportRow>(
-            `SELECT * FROM reports WHERE group_id = ? ORDER BY received_at DESC LIMIT ?`,
+            `SELECT *
+             FROM reports
+             WHERE group_id = ?
+             ORDER BY received_at DESC
+             LIMIT ?`,
             groupId,
             limit,
         );
@@ -469,16 +551,29 @@ export class Db {
 
     latestProcessedReport(groupId: number): ReportRow | null {
         return this.one<ReportRow>(
-            `SELECT * FROM reports WHERE group_id = ? AND status = 'processed'
-       ORDER BY received_at DESC LIMIT 1`,
+            `SELECT *
+             FROM reports
+             WHERE group_id = ?
+               AND status = 'processed'
+             ORDER BY received_at DESC
+             LIMIT 1`,
             groupId,
         );
     }
 
     reportsPerDay(sinceMs: number): { day: string; n: number }[] {
         return this.many<{ day: string; n: number }>(
-            `SELECT strftime('%Y-%m-%d', received_at / 1000, 'unixepoch') AS day, COUNT(*) AS n
-       FROM reports WHERE received_at >= ? GROUP BY day ORDER BY day`,
+            `SELECT
+                 strftime(
+                     '%Y-%m-%d',
+                     received_at / 1000,
+                     'unixepoch'
+                 ) AS day,
+                 COUNT(*) AS n
+             FROM reports
+             WHERE received_at >= ?
+             GROUP BY day
+             ORDER BY day`,
             sinceMs,
         );
     }
@@ -492,13 +587,25 @@ export class Db {
             this.many<{ v: string }>(sql).map((r) => r.v);
         return {
             products: col(
-                `SELECT DISTINCT product AS v FROM reports WHERE product IS NOT NULL ORDER BY v LIMIT 100`,
+                `SELECT DISTINCT product AS v
+                 FROM reports
+                 WHERE product IS NOT NULL
+                 ORDER BY v
+                 LIMIT 100`,
             ),
             versions: col(
-                `SELECT DISTINCT version AS v FROM reports WHERE version IS NOT NULL ORDER BY v DESC LIMIT 100`,
+                `SELECT DISTINCT version AS v
+                 FROM reports
+                 WHERE version IS NOT NULL
+                 ORDER BY v DESC
+                 LIMIT 100`,
             ),
             platforms: col(
-                `SELECT DISTINCT platform AS v FROM reports WHERE platform IS NOT NULL ORDER BY v LIMIT 20`,
+                `SELECT DISTINCT platform AS v
+                 FROM reports
+                 WHERE platform IS NOT NULL
+                 ORDER BY v
+                 LIMIT 20`,
             ),
         };
     }
@@ -510,8 +617,9 @@ export class Db {
                 group_id: number | null;
             }>(
                 `DELETE FROM reports
-         WHERE received_at < ? AND status <> 'processing'
-         RETURNING id, group_id`,
+                 WHERE received_at < ?
+                   AND status <> 'processing'
+                 RETURNING id, group_id`,
                 cutoffMs,
             );
             this.recountGroups(expiredReports.map((report) => report.group_id));
@@ -522,7 +630,9 @@ export class Db {
     deleteReport(id: string): void {
         this.inWriteTransaction(() => {
             const groupId = this.one<{ group_id: number | null }>(
-                `DELETE FROM reports WHERE id = ? RETURNING group_id`,
+                `DELETE FROM reports
+                 WHERE id = ?
+                 RETURNING group_id`,
                 id,
             )?.group_id ?? null;
             this.recountGroups([groupId]);

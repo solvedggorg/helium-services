@@ -5,21 +5,16 @@ import {
     normalizeAppleCrashReport,
     parseAppleCrashMeta,
 } from '../src/applecrash.ts';
-
-function fixture(): Promise<string> {
-    return Deno.readTextFile(
-        new URL('./fixtures/apple_report.txt', import.meta.url),
-    );
-}
+import { appleCrashFixture } from './helpers.ts';
 
 Deno.test('recognizes translated reports and rejects .ips JSON', async () => {
-    assert(looksLikeAppleCrashReport(await fixture()));
+    assert(looksLikeAppleCrashReport(await appleCrashFixture()));
     assert(!looksLikeAppleCrashReport('{"app_name":"Helium"}'));
     assert(!looksLikeAppleCrashReport('random text'));
 });
 
 Deno.test('extracts report metadata', async () => {
-    const meta = parseAppleCrashMeta(await fixture());
+    const meta = parseAppleCrashMeta(await appleCrashFixture());
     assertEquals(meta.process, 'Helium');
     assertEquals(meta.identifier, 'net.imput.helium');
     assertEquals(meta.version, '0.14.3.1');
@@ -29,7 +24,7 @@ Deno.test('extracts report metadata', async () => {
 });
 
 Deno.test('normalization produces the classic parser format', async () => {
-    const normalized = normalizeAppleCrashReport(await fixture());
+    const normalized = normalizeAppleCrashReport(await appleCrashFixture());
 
     // Banner and Full Report JSON are stripped.
     assert(!normalized.includes('Translated Report'));

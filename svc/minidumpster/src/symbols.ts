@@ -28,13 +28,6 @@ export interface SymbolsOptions {
     symsorterBin?: string;
 }
 
-function bearerToken(req: Request): string | null {
-    const h = req.headers.get('authorization') ?? '';
-    const m = /^Bearer\s+(.+)$/i.exec(h);
-
-    return m ? m[1].trim() : null;
-}
-
 function requireValidNames(product: string, version: string): void {
     for (const [field, value] of [['product', product], ['version', version]]) {
         if (!NAME_RE.test(value)) {
@@ -221,9 +214,6 @@ async function handleSymbolUpload(
     config: Config,
     opts: SymbolsOptions,
 ): Promise<SymbolIngestResult> {
-    if (bearerToken(req) !== config.symbolUploadToken) {
-        throw new HttpError(401, 'missing or invalid bearer token');
-    }
     const body = req.body;
     if (!body) {
         throw new HttpError(400, 'empty request body');

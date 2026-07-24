@@ -2,6 +2,7 @@ import type { Config } from './config.ts';
 import type { Db, NewReport } from './db.ts';
 import { logError } from './log.ts';
 import { dumpPath, processedPath } from './paths.ts';
+import type { SymbolicatorResponse } from './signature.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -10,6 +11,15 @@ export function reportExpiresAt(
     retentionDays: number,
 ): number {
     return receivedAt + retentionDays * DAY_MS;
+}
+
+export async function readProcessedResponse(
+    dataDir: string,
+    reportId: string,
+): Promise<SymbolicatorResponse> {
+    return JSON.parse(
+        await Deno.readTextFile(processedPath(dataDir, reportId)),
+    ) as SymbolicatorResponse;
 }
 
 function removeIfExists(path: string): void {

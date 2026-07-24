@@ -1,6 +1,6 @@
 import type { Db } from './db.ts';
 import { logError, logEvent } from './log.ts';
-import { processedPath } from './paths.ts';
+import { readProcessedResponse } from './reports.ts';
 import type { SymbolicatorResponse } from './signature.ts';
 
 function functionSearchText(response: SymbolicatorResponse): string {
@@ -37,9 +37,7 @@ export async function backfillReportSearch(
 
     for (const reportId of db.reportsMissingSearchIndex()) {
         try {
-            const response = JSON.parse(
-                await Deno.readTextFile(processedPath(dataDir, reportId)),
-            ) as SymbolicatorResponse;
+            const response = await readProcessedResponse(dataDir, reportId);
             indexReportResponse(db, reportId, response);
             indexed++;
         } catch (err) {

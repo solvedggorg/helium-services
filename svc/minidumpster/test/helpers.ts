@@ -160,3 +160,18 @@ export function fixtureResponse(): Promise<string> {
         new URL('./fixtures/symbolicator_completed.json', import.meta.url),
     );
 }
+
+export function appleCrashFixture(): Promise<string> {
+    return Deno.readTextFile(
+        new URL('./fixtures/apple_report.txt', import.meta.url),
+    );
+}
+
+export function appleFixtureResponse(): Promise<string> {
+    return Deno.readTextFile(
+        new URL(
+            './fixtures/symbolicator_apple_completed.json',
+            import.meta.url,
+        ),
+    );
+}

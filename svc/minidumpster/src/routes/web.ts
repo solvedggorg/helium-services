@@ -6,11 +6,11 @@ import { logError, logEvent } from '../log.ts';
 import { requireSession } from './auth.ts';
 import type { GroupFilter } from '../db.ts';
 import type { AppDeps, Env } from '../app.ts';
-import type { SymbolicatorResponse } from '../signature.ts';
 import {
     deleteGroupAndPayloads,
     deleteReportAndPayload,
     insertReportForStoredDump,
+    readProcessedResponse,
     reportExpiresAt,
 } from '../reports.ts';
 import {
@@ -33,14 +33,9 @@ const disablePrivateResponseCaching: MiddlewareHandler<Env> = async (
     c.header('cache-control', 'private, no-store');
 };
 
-async function readProcessed(
-    dataDir: string,
-    reportId: string,
-): Promise<SymbolicatorResponse | null> {
+async function readProcessed(dataDir: string, reportId: string) {
     try {
-        return JSON.parse(
-            await Deno.readTextFile(processedPath(dataDir, reportId)),
-        ) as SymbolicatorResponse;
+        return await readProcessedResponse(dataDir, reportId);
     } catch (err) {
         logError('failed_parsing_processed', err, { dataDir, reportId });
         return null;

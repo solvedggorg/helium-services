@@ -11,6 +11,8 @@ import {
 } from '../src/paths.ts';
 import { processReport } from '../src/worker.ts';
 import {
+    appleCrashFixture,
+    appleFixtureResponse,
     chunked,
     dirEntries,
     encodeMultipart,
@@ -18,28 +20,13 @@ import {
     testSessionCookie,
 } from './helpers.ts';
 
-function fixture(): Promise<string> {
-    return Deno.readTextFile(
-        new URL('./fixtures/apple_report.txt', import.meta.url),
-    );
-}
-
-function appleFixtureResponse(): Promise<string> {
-    return Deno.readTextFile(
-        new URL(
-            './fixtures/symbolicator_apple_completed.json',
-            import.meta.url,
-        ),
-    );
-}
-
 Deno.test('pasted Apple crash reports are filed and deduped by incident id', async () => {
     const env = await makeTestEnv();
     try {
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
         const form = new FormData();
-        form.append('text', await fixture());
+        form.append('text', await appleCrashFixture());
         const res = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -132,7 +119,7 @@ Deno.test('upload rejects non-crash-report input and requires a session', async 
 });
 
 Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes', async () => {
-    const fixtureText = await fixture();
+    const fixtureText = await appleCrashFixture();
     const submitted = fixtureText.trim();
     const normalized = submitted.replace(/\r?\n/g, '\r\n');
     const fixtureBytes = new TextEncoder().encode(normalized).length;
@@ -195,7 +182,7 @@ Deno.test('manual upload removes the payload when database insertion fails', asy
             throw new Error('simulated database failure');
         };
         const form = new FormData();
-        form.append('text', await fixture());
+        form.append('text', await appleCrashFixture());
         const res = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -489,7 +476,7 @@ Deno.test('worker symbolicates Apple reports via /applecrashreport', async () =>
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
         const form = new FormData();
-        form.append('text', await fixture());
+        form.append('text', await appleCrashFixture());
         const res = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },

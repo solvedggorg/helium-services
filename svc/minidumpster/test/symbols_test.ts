@@ -16,7 +16,10 @@ Deno.test('POST /api/symbols requires the bearer token', async () => {
             },
         );
         assertEquals(anon.status, 401);
-        await anon.body?.cancel();
+        assertEquals(await anon.json(), {
+            ok: false,
+            error: 'missing or invalid bearer token',
+        });
 
         const wrong = await app.request(
             '/api/symbols?product=mybrowser&version=1.0.0',
@@ -27,7 +30,24 @@ Deno.test('POST /api/symbols requires the bearer token', async () => {
             },
         );
         assertEquals(wrong.status, 401);
-        await wrong.body?.cancel();
+        assertEquals(await wrong.json(), {
+            ok: false,
+            error: 'missing or invalid bearer token',
+        });
+
+        const malformed = await app.request(
+            '/api/symbols?product=mybrowser&version=1.0.0',
+            {
+                method: 'POST',
+                headers: { authorization: 'not bearer' },
+                body: new Uint8Array([1, 2, 3]),
+            },
+        );
+        assertEquals(malformed.status, 400);
+        assertEquals(await malformed.json(), {
+            ok: false,
+            error: 'missing or invalid bearer token',
+        });
     } finally {
         await env.cleanup();
     }

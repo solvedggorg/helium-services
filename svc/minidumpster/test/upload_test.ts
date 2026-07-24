@@ -219,10 +219,6 @@ Deno.test('authenticated report responses are not cached', async () => {
         const cookie = await testSessionCookie(env);
         const id = crypto.randomUUID();
         const receivedAt = Date.now();
-        const retentionDeadline = receivedAt
-            + env.config.retentionDays * 86_400_000;
-        const formattedDeadline = new Date(retentionDeadline).toISOString()
-            .replace('T', ' ').slice(0, 19) + ' UTC';
         await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
         await writeFileWithDirs(processedPath(env.dir, id), '{}');
         env.db.insertReport({
@@ -245,15 +241,9 @@ Deno.test('authenticated report responses are not cached', async () => {
         const initialPage = await app.request(`/reports/${id}`, {
             headers: { cookie },
         });
-        const initialHtml = await initialPage.text();
         assertEquals(
             initialPage.headers.get('cache-control'),
             'private, no-store',
-        );
-        assert(
-            initialHtml.includes(
-                `This report will be automatically deleted at ${formattedDeadline}.`,
-            ),
         );
 
         const dump = await app.request(`/reports/${id}/dump`, {

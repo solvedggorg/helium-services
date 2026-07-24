@@ -22,6 +22,7 @@
   <% if (it.report.error) { %> — <code><%= it.report.error %></code><% } %>
   · received <%= it.fmtTime(it.report.received_at) %>
   <% if (it.report.processed_at) { %> · processed <%= it.fmtTime(it.report.processed_at) %><% } %>
+  · deletes at <%= it.fmtTime(it.retentionDeadline) %>
 </p>
 
 <p>
@@ -30,9 +31,6 @@
   · <a href="/reports/<%= it.report.id %>/json">Download processed JSON</a>
   <% } %>
 </p>
-
-<h2>Retention</h2>
-<p class="muted">This report will be automatically deleted at <%= it.fmtTime(it.retentionDeadline) %>.</p>
 
 <h2>Annotations</h2>
 <div class="overflow">

@@ -1,3 +1,5 @@
+import { basename } from '@std/path/windows';
+
 export interface SymFrame {
     status?: string;
     function?: string | null;
@@ -46,12 +48,6 @@ interface SignatureResult {
     signature: string;
     title: string;
     symbolicated: boolean;
-}
-
-function basename(path: string): string {
-    const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-
-    return i >= 0 ? path.slice(i + 1) : path;
 }
 
 function parseHex(s: string | undefined | null): number | null {

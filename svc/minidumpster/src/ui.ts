@@ -1,5 +1,6 @@
 import { Eta } from 'eta';
 import { fromFileUrl } from '@std/path';
+import { basename } from '@std/path/windows';
 
 import type {
     ArtifactIngestRow,
@@ -211,7 +212,7 @@ function frameView(f: SymFrame) {
         fn: f.function ?? f.symbol ?? null,
         addr: f.instruction_addr ?? '?',
         loc,
-        mod: f.package?.split(/[\\/]/).pop() ?? '',
+        mod: f.package ? basename(f.package) : '',
     };
 }
 
@@ -264,6 +265,7 @@ export function reportPage(
     report: ReportRow,
     group: GroupRow | null,
     stack: string | null,
+    githubIssueUrl: string | null,
     retentionDeadline: number,
     user?: string,
 ): string {
@@ -277,6 +279,7 @@ export function reportPage(
         report,
         group,
         stack,
+        githubIssueUrl,
         annotations,
         retentionDeadline,
     });

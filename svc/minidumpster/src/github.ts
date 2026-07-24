@@ -1,3 +1,15 @@
+import { basename } from '@std/path/windows';
+
+import type { GroupRow, ReportRow } from './db.ts';
+import {
+    crashingThread,
+    platformFromResponse,
+    type SymbolicatorResponse,
+    type SymFrame,
+} from './signature.ts';
+
+const MAX_ISSUE_FRAMES = 30;
+
 export function githubApiHeaders(token: string): Record<string, string> {
     return {
         Accept: 'application/vnd.github+json',
@@ -5,6 +17,102 @@ export function githubApiHeaders(token: string): Record<string, string> {
         'X-GitHub-Api-Version': '2022-11-28',
         'User-Agent': 'minidumpster',
     };
+}
+
+function oneLine(value: string): string {
+    return value.replace(/\s+/g, ' ').trim();
+}
+
+function sourceLocation(frame: SymFrame): string | null {
+    if (!frame.filename) {
+        return null;
+    }
+
+    const path = frame.filename.replaceAll('\\', '/');
+    const src = path.lastIndexOf('/src/');
+    let safePath = path;
+    if (src >= 0) {
+        safePath = path.slice(src + '/src/'.length);
+    } else if (
+        path.startsWith('/')
+        || /^[A-Za-z]:\//.test(path)
+        || path.split('/').includes('..')
+    ) {
+        safePath = basename(path);
+    }
+
+    return frame.lineno == null ? safePath : `${safePath}:${frame.lineno}`;
+}
+
+function frameLine(frame: SymFrame, index: number): string {
+    const fn = oneLine(frame.function ?? frame.symbol ?? '<unknown>');
+    const details = [
+        sourceLocation(frame),
+        frame.package ? basename(frame.package) : null,
+    ].filter(Boolean);
+
+    return `${String(index).padStart(2)}  ${fn}${
+        details.length > 0 ? ` (${details.join(', ')})` : ''
+    }`;
+}
+
+export function githubIssueUrl(
+    repository: string,
+    template: string,
+    report: ReportRow,
+    group: GroupRow | null,
+    response: SymbolicatorResponse,
+    publicBaseUrl: string,
+): string {
+    const title = oneLine(
+        group?.title ?? response.crash_reason ?? 'Helium crash',
+    );
+    const reason = oneLine(response.crash_reason ?? 'Unknown');
+    const reportUrl = `${publicBaseUrl}/reports/${
+        encodeURIComponent(report.id)
+    }`;
+    const thread = crashingThread(response);
+    const frames = thread?.frames.slice(0, MAX_ISSUE_FRAMES) ?? [];
+    const stack = frames.map(frameLine);
+    if (thread && thread.frames.length > frames.length) {
+        stack.push(
+            `... ${
+                thread.frames.length - frames.length
+            } more frames in ${reportUrl}`,
+        );
+    }
+
+    const additional = [
+        `Minidumpster report: ${reportUrl}`,
+        `Crash reason: ${reason}`,
+        '',
+        '### Crashing thread',
+        '',
+        '```text',
+        ...stack,
+        '```',
+    ].join('\n');
+
+    const [owner, name] = repository.split('/');
+    const url = new URL(
+        `https://github.com/${encodeURIComponent(owner)}/${
+            encodeURIComponent(name)
+        }/issues/new`,
+    );
+    url.searchParams.set('template', template);
+    url.searchParams.set('title', `[Bug]: ${title}`.slice(0, 256));
+    const os = platformFromResponse(response) ?? report.platform;
+    if (os === 'macOS' || os === 'Windows' || os === 'Linux') {
+        url.searchParams.set('os', os);
+    }
+    if (report.version) {
+        url.searchParams.set('version', oneLine(report.version));
+    }
+    url.searchParams.set('description', title);
+    url.searchParams.set('actual', `Helium crashed: ${reason}`);
+    url.searchParams.set('expected', 'Helium should not crash.');
+    url.searchParams.set('additional', additional);
+    return url.toString();
 }
 
 export async function checkOrgMembership(

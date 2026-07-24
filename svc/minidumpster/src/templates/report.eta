@@ -33,6 +33,10 @@
 </p>
 
 <div class="actions">
+<% if (it.githubIssueUrl) { %>
+<a class="button" href="<%= it.githubIssueUrl %>" target="_blank"
+   rel="noopener noreferrer">Open GitHub issue</a>
+<% } %>
 <% if (it.report.status === 'processed') { %>
 <form method="post" action="/reports/<%= it.report.id %>/reprocess">
   <button type="submit">Reprocess report</button>

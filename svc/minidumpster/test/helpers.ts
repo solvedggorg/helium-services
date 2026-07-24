@@ -21,6 +21,8 @@ export function testConfig(
         githubClientId: 'test-client-id',
         githubClientSecret: 'test-client-secret',
         githubOrg: 'test-org',
+        githubIssueRepo: null,
+        githubIssueTemplate: null,
         sessionSecret: 'test-secret-0123456789abcdef',
         symbolUploadToken: 'test-upload-token',
         maxDumpSizeBytes: 20 * 1024 * 1024,

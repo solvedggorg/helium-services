@@ -23,6 +23,7 @@ import {
     looksLikeAppleCrashReport,
     parseAppleCrashMeta,
 } from '../applecrash.ts';
+import { githubIssueUrl } from '../github.ts';
 
 const disablePrivateResponseCaching: MiddlewareHandler<Env> = async (
     c,
@@ -274,10 +275,21 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             : null;
 
         let stack: string | null = null;
+        let issueUrl: string | null = null;
         if (report.status === 'processed') {
             const resp = await readProcessed(config.dataDir, report.id);
             if (resp) {
                 stack = ui.stackHtml(resp, true);
+                if (config.githubIssueRepo && config.githubIssueTemplate) {
+                    issueUrl = githubIssueUrl(
+                        config.githubIssueRepo,
+                        config.githubIssueTemplate,
+                        report,
+                        group,
+                        resp,
+                        config.publicBaseUrl,
+                    );
+                }
             }
         }
 
@@ -286,6 +298,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                 report,
                 group,
                 stack,
+                issueUrl,
                 reportExpiresAt(
                     report.received_at,
                     config.retentionDays,

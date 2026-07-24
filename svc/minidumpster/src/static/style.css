@@ -110,6 +110,17 @@ form.filters {
 .actions {
     display: flex;
     gap: .5rem;
+
+    .button {
+        appearance: auto;
+        border: 2px outset ButtonBorder;
+        border-radius: 2px;
+        padding: 1px 6px;
+        background: ButtonFace;
+        color: ButtonText;
+        text-decoration: none;
+        font: inherit;
+    }
 }
 
 button.danger {

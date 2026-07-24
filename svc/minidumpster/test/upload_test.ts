@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertRejects } from '@std/assert';
+import { assert, assertEquals, assertFalse, assertRejects } from '@std/assert';
 import { DatabaseSync } from 'node:sqlite';
 
 import { buildApp } from '../src/app.ts';
@@ -213,7 +213,10 @@ Deno.test('manual upload removes the payload when database insertion fails', asy
 });
 
 Deno.test('authenticated report responses are not cached', async () => {
-    const env = await makeTestEnv();
+    const env = await makeTestEnv({
+        githubIssueRepo: 'imputnet/helium',
+        githubIssueTemplate: 'bug-report.yml',
+    });
     try {
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
@@ -245,6 +248,7 @@ Deno.test('authenticated report responses are not cached', async () => {
             initialPage.headers.get('cache-control'),
             'private, no-store',
         );
+        assert((await initialPage.text()).includes('Open GitHub issue'));
 
         const dump = await app.request(`/reports/${id}/dump`, {
             headers: { cookie },
@@ -299,7 +303,9 @@ Deno.test('processed reports can be manually requeued', async () => {
         const page = await app.request(`/reports/${id}`, {
             headers: { cookie },
         });
-        assert((await page.text()).includes('Reprocess report'));
+        const pageText = await page.text();
+        assert(pageText.includes('Reprocess report'));
+        assertFalse(pageText.includes('Open GitHub issue'));
 
         const response = await app.request(`/reports/${id}/reprocess`, {
             method: 'POST',

@@ -10,7 +10,7 @@
   · signature <code><%= it.group.signature.slice(0, 16) %>…</code>
 </p>
 
-<form method="post" action="/groups/<%= it.group.id %>/delete"
+<form class="actions" method="post" action="/groups/<%= it.group.id %>/delete"
       data-confirm="Delete this group and all <%= it.group.report_count %> reports?">
   <button type="submit" class="danger">Delete group</button>
 </form>

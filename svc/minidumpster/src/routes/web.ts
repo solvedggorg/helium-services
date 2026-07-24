@@ -74,7 +74,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     // layout, so its static assets must be public.
     app.use('/static/*', serveStatic({ root: './src' }));
 
-    app.use('*', requireSession(config));
+    app.use('*', deps.webAuth ?? requireSession(config));
     app.use('*', disablePrivateResponseCaching);
 
     app.get('/', (c) => {

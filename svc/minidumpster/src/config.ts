@@ -126,3 +126,25 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
         artifactCrawlerNamePattern: artifactPattern,
     };
 }
+
+export function devConfig(
+    env: Record<string, string | undefined>,
+): Config {
+    const config = loadConfig({
+        ...env,
+        DATA_DIR: env['DEV_DATA_DIR'] || './.dev-data',
+        SYMBOLICATOR_URL: 'http://127.0.0.1:1',
+        GITHUB_CLIENT_ID: 'unused-in-mock-dev',
+        GITHUB_CLIENT_SECRET: 'unused-in-mock-dev',
+        GITHUB_ORG: 'unused-in-mock-dev',
+        SESSION_SECRET: 'mock-dev-session-secret',
+        SYMBOL_UPLOAD_TOKEN: 'mock-dev-symbol-token',
+        PUBLIC_BASE_URL: 'http://localhost',
+        GITHUB_ARTIFACT_TOKEN: '',
+    });
+
+    return {
+        ...config,
+        publicBaseUrl: `http://localhost:${config.port}`,
+    };
+}

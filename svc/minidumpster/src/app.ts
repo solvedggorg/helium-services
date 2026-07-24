@@ -12,6 +12,7 @@ export interface AppDeps {
     db: Db;
     githubFetch?: typeof fetch;
     symsorterBin?: string;
+    webAuth?: MiddlewareHandler<Env>;
 }
 
 export type Env = {

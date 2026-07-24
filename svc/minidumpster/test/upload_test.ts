@@ -1,4 +1,4 @@
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertRejects } from '@std/assert';
 import { DatabaseSync } from 'node:sqlite';
 
 import { buildApp } from '../src/app.ts';
@@ -319,6 +319,141 @@ Deno.test('processed reports can be manually requeued', async () => {
             headers: { cookie },
         });
         assertEquals(again.status, 409);
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('reports can be deleted and empty groups are pruned', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const ids = [crypto.randomUUID(), crypto.randomUUID()];
+        const groupId = env.db.upsertGroup(
+            'report-delete',
+            'Crash()',
+            Date.now(),
+        );
+        for (const id of ids) {
+            await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+            await writeFileWithDirs(processedPath(env.dir, id), '{}');
+            env.db.insertReport({
+                id,
+                product: 'Helium',
+                version: '1.0',
+                guid: null,
+                ptype: null,
+                channel: null,
+                annotations: '{}',
+                received_at: Date.now(),
+            });
+            env.db.markProcessed(
+                id,
+                groupId,
+                'Windows',
+                Date.now(),
+                true,
+                1,
+            );
+        }
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/reports/${ids[0]}`, {
+            headers: { cookie },
+        });
+        assert((await page.text()).includes('Delete report'));
+
+        const first = await app.request(`/reports/${ids[0]}/delete`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(first.status, 303);
+        assertEquals(first.headers.get('location'), `/groups/${groupId}`);
+        assertEquals(env.db.getReport(ids[0]), null);
+        assertEquals(env.db.getGroup(groupId)?.report_count, 1);
+        await assertRejects(
+            () => Deno.stat(dumpPath(env.dir, ids[0])),
+            Deno.errors.NotFound,
+        );
+        await assertRejects(
+            () => Deno.stat(processedPath(env.dir, ids[0])),
+            Deno.errors.NotFound,
+        );
+
+        const second = await app.request(`/reports/${ids[1]}/delete`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(second.status, 303);
+        assertEquals(second.headers.get('location'), '/');
+        assertEquals(env.db.getReport(ids[1]), null);
+        assertEquals(env.db.getGroup(groupId), null);
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('groups can be deleted with all reports and payloads', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const ids = [crypto.randomUUID(), crypto.randomUUID()];
+        const groupId = env.db.upsertGroup(
+            'group-delete',
+            'GroupCrash()',
+            Date.now(),
+        );
+        for (const id of ids) {
+            await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+            await writeFileWithDirs(processedPath(env.dir, id), '{}');
+            env.db.insertReport({
+                id,
+                product: 'Helium',
+                version: '1.0',
+                guid: null,
+                ptype: null,
+                channel: null,
+                annotations: '{}',
+                received_at: Date.now(),
+            });
+            env.db.markProcessed(
+                id,
+                groupId,
+                'Windows',
+                Date.now(),
+                true,
+                1,
+            );
+            env.db.indexReportFunctions(id, 'GroupCrash');
+        }
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/groups/${groupId}`, {
+            headers: { cookie },
+        });
+        assert((await page.text()).includes('Delete group'));
+
+        const response = await app.request(`/groups/${groupId}/delete`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(response.status, 303);
+        assertEquals(response.headers.get('location'), '/');
+        assertEquals(env.db.getGroup(groupId), null);
+        assertEquals(env.db.searchReports('GroupCrash'), []);
+        for (const id of ids) {
+            assertEquals(env.db.getReport(id), null);
+            await assertRejects(
+                () => Deno.stat(dumpPath(env.dir, id)),
+                Deno.errors.NotFound,
+            );
+            await assertRejects(
+                () => Deno.stat(processedPath(env.dir, id)),
+                Deno.errors.NotFound,
+            );
+        }
     } finally {
         await env.cleanup();
     }

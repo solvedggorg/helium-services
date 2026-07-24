@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
-export type ReportStatus = 'pending' | 'processing' | 'processed' | 'failed';
-export type ReportKind = 'minidump' | 'apple';
+type ReportStatus = 'pending' | 'processing' | 'processed' | 'failed';
+type ReportKind = 'minidump' | 'apple';
 
 export interface ReportRow {
     id: string;
@@ -58,7 +58,7 @@ export interface NewReport {
     kind?: ReportKind;
 }
 
-export type ArtifactIngestStatus = 'pending' | 'ingested' | 'failed';
+type ArtifactIngestStatus = 'pending' | 'ingested' | 'failed';
 
 export interface ArtifactIngestRow {
     repo: string;
@@ -695,6 +695,24 @@ export class Db {
                 id,
             )?.group_id ?? null;
             this.recountGroups([groupId]);
+        });
+    }
+
+    deleteGroup(id: number): string[] | null {
+        return this.inWriteTransaction(() => {
+            if (!this.getGroup(id)) {
+                return null;
+            }
+
+            const reportIds = this.many<{ id: string }>(
+                `DELETE FROM reports
+                 WHERE group_id = ?
+                 RETURNING id`,
+                id,
+            ).map((report) => report.id);
+            this.recountGroups([id]);
+
+            return reportIds;
         });
     }
 }

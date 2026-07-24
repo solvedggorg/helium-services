@@ -3,20 +3,8 @@ import { join } from '@std/path';
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
 import { logError, logEvent } from './log.ts';
-import { dumpPath, processedPath, symbolsDir } from './paths.ts';
-
-function removeIfExists(path: string): void {
-    try {
-        Deno.removeSync(path);
-    } catch (err) {
-        if (!(err instanceof Deno.errors.NotFound)) throw err;
-    }
-}
-
-const REPORT_STORES = [
-    ['raw', dumpPath],
-    ['processed', processedPath],
-] as const;
+import { symbolsDir } from './paths.ts';
+import { deleteReportPayloads } from './reports.ts';
 
 export function runRetention(
     db: Db,
@@ -26,18 +14,7 @@ export function runRetention(
     const cutoff = now - config.retentionDays * 24 * 60 * 60 * 1000;
 
     const expired = db.deleteExpiredReports(cutoff);
-    for (const id of expired) {
-        for (const [kind, path] of REPORT_STORES) {
-            try {
-                removeIfExists(path(config.dataDir, id));
-            } catch (err) {
-                logError('retention_file_delete_error', err, {
-                    report_id: id,
-                    kind,
-                });
-            }
-        }
-    }
+    deleteReportPayloads(config, expired);
 
     if (expired.length > 0) {
         logEvent('retention_run', { deleted: expired.length, cutoff });

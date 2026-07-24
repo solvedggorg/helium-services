@@ -7,7 +7,12 @@ import { requireSession } from './auth.ts';
 import type { GroupFilter } from '../db.ts';
 import type { AppDeps, Env } from '../app.ts';
 import type { SymbolicatorResponse } from '../signature.ts';
-import { insertReportForStoredDump, reportExpiresAt } from '../reports.ts';
+import {
+    deleteGroupAndPayloads,
+    deleteReportAndPayload,
+    insertReportForStoredDump,
+    reportExpiresAt,
+} from '../reports.ts';
 import {
     dumpPath,
     processedPath,
@@ -241,6 +246,23 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         );
     });
 
+    app.post('/groups/:id/delete', (c) => {
+        const id = Number(c.req.param('id'));
+        const reportIds = Number.isInteger(id)
+            ? deleteGroupAndPayloads(db, config, id)
+            : null;
+        if (!reportIds) {
+            return c.html(ui.messagePage('Not found', 'No such group.'), 404);
+        }
+
+        logEvent('group_deleted_manual', {
+            group_id: id,
+            reports_deleted: reportIds.length,
+            deleted_by: c.get('session').login,
+        });
+        return c.redirect('/', 303);
+    });
+
     app.get('/reports/:id', async (c) => {
         const report = db.getReport(c.req.param('id'));
         if (!report) {
@@ -295,6 +317,26 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             requeued_by: c.get('session').login,
         });
         return c.redirect(`/reports/${id}`, 303);
+    });
+
+    app.post('/reports/:id/delete', (c) => {
+        const id = c.req.param('id');
+        const report = db.getReport(id);
+        if (!report) {
+            return c.html(ui.messagePage('Not found', 'No such report.'), 404);
+        }
+
+        deleteReportAndPayload(db, config, id);
+        const groupId = report.group_id;
+        const redirect = groupId != null && db.getGroup(groupId)
+            ? `/groups/${groupId}`
+            : '/';
+        logEvent('report_deleted_manual', {
+            report_id: id,
+            group_id: groupId,
+            deleted_by: c.get('session').login,
+        });
+        return c.redirect(redirect, 303);
     });
 
     app.get('/reports/:id/dump', async (c) => {

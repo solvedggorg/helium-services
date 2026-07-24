@@ -51,19 +51,45 @@ export function deleteReportAndPayload(
     // Delete the database row first so downloads and searches are denied even
     // if file removal fails.
     db.deleteReport(reportId);
-    for (
-        const [kind, path] of [
-            ['raw', dumpPath(config.dataDir, reportId)],
-            ['processed', processedPath(config.dataDir, reportId)],
-        ] as const
-    ) {
-        try {
-            removeIfExists(path);
-        } catch (err) {
-            logError('report_payload_delete_error', err, {
-                report_id: reportId,
-                kind,
-            });
+    deleteReportPayloads(config, [reportId]);
+}
+
+export function deleteReportPayloads(
+    config: Config,
+    reportIds: Iterable<string>,
+): void {
+    for (const reportId of reportIds) {
+        for (
+            const [kind, path] of [
+                ['raw', dumpPath(config.dataDir, reportId)],
+                ['processed', processedPath(config.dataDir, reportId)],
+            ] as const
+        ) {
+            try {
+                removeIfExists(path);
+            } catch (err) {
+                logError('report_payload_delete_error', err, {
+                    report_id: reportId,
+                    kind,
+                });
+            }
         }
     }
+}
+
+export function deleteGroupAndPayloads(
+    db: Db,
+    config: Config,
+    groupId: number,
+): string[] | null {
+    // Delete all rows atomically before removing files so none of the reports
+    // remain accessible if an individual file removal fails.
+    const reportIds = db.deleteGroup(groupId);
+    if (!reportIds) {
+        return null;
+    }
+
+    deleteReportPayloads(config, reportIds);
+
+    return reportIds;
 }

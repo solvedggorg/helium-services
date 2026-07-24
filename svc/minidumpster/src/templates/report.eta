@@ -32,11 +32,17 @@
   <% } %>
 </p>
 
+<div class="actions">
 <% if (it.report.status === 'processed') { %>
 <form method="post" action="/reports/<%= it.report.id %>/reprocess">
   <button type="submit">Reprocess report</button>
 </form>
 <% } %>
+<form method="post" action="/reports/<%= it.report.id %>/delete"
+      data-confirm="Delete this report and its files?">
+  <button type="submit" class="danger">Delete report</button>
+</form>
+</div>
 
 <h2>Annotations</h2>
 <div class="overflow">

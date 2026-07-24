@@ -276,6 +276,30 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         );
     });
 
+    app.post('/reports/:id/reprocess', (c) => {
+        const id = c.req.param('id');
+        const report = db.getReport(id);
+        if (!report) {
+            return c.html(ui.messagePage('Not found', 'No such report.'), 404);
+        }
+        if (!db.requeueReport(id)) {
+            return c.html(
+                ui.messagePage(
+                    'Cannot reprocess',
+                    'Only processed reports can be reprocessed.',
+                    c.get('session').login,
+                ),
+                409,
+            );
+        }
+
+        logEvent('report_requeued_manual', {
+            report_id: id,
+            requeued_by: c.get('session').login,
+        });
+        return c.redirect(`/reports/${id}`, 303);
+    });
+
     app.get('/reports/:id/dump', async (c) => {
         const report = db.getReport(c.req.param('id'));
         if (!report) {

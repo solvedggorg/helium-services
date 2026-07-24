@@ -290,6 +290,18 @@ export class Db {
         ).run(error, attempts, nextAttemptAt, id);
     }
 
+    requeueReport(id: string): boolean {
+        const res = this.db.prepare(
+            `UPDATE reports
+             SET status = 'pending', error = NULL,
+                 attempts = 0, next_attempt_at = 0
+             WHERE id = ?
+               AND status = 'processed'`,
+        ).run(id);
+
+        return Number(res.changes) > 0;
+    }
+
     registerArtifact(
         repo: string,
         artifactId: number,

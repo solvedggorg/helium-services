@@ -267,6 +267,63 @@ Deno.test('authenticated report responses are not cached', async () => {
     }
 });
 
+Deno.test('processed reports can be manually requeued', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const id = crypto.randomUUID();
+        await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+        await writeFileWithDirs(
+            processedPath(env.dir, id),
+            JSON.stringify({ status: 'completed', stacktraces: [] }),
+        );
+        env.db.insertReport({
+            id,
+            product: 'Helium',
+            version: '1.0',
+            guid: null,
+            ptype: null,
+            channel: null,
+            annotations: '{}',
+            received_at: Date.now(),
+        });
+        const groupId = env.db.upsertGroup(
+            'manual-requeue',
+            'Crash()',
+            Date.now(),
+        );
+        env.db.markProcessed(id, groupId, 'macOS', Date.now(), true, 3);
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/reports/${id}`, {
+            headers: { cookie },
+        });
+        assert((await page.text()).includes('Reprocess report'));
+
+        const response = await app.request(`/reports/${id}/reprocess`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(response.status, 303);
+        assertEquals(response.headers.get('location'), `/reports/${id}`);
+
+        const requeued = env.db.getReport(id)!;
+        assertEquals(requeued.status, 'pending');
+        assertEquals(requeued.attempts, 0);
+        assertEquals(requeued.next_attempt_at, 0);
+        assertEquals(requeued.group_id, groupId);
+
+        const again = await app.request(`/reports/${id}/reprocess`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(again.status, 409);
+    } finally {
+        await env.cleanup();
+    }
+});
+
 Deno.test('worker symbolicates Apple reports via /applecrashreport', async () => {
     const appleResponse = await appleFixtureResponse();
     let normalizedSeen = '';

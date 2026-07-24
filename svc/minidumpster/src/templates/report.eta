@@ -32,6 +32,12 @@
   <% } %>
 </p>
 
+<% if (it.report.status === 'processed') { %>
+<form method="post" action="/reports/<%= it.report.id %>/reprocess">
+  <button type="submit">Reprocess report</button>
+</form>
+<% } %>
+
 <h2>Annotations</h2>
 <div class="overflow">
 <table>

@@ -68,7 +68,7 @@ async function submitAndPoll(
         : deadline;
 
     const res = await fetchFn(
-        `${baseUrl}${endpoint}?timeout=${REQUEST_TIMEOUT_SECONDS}`,
+        `${baseUrl}${endpoint}?timeout=${REQUEST_TIMEOUT_SECONDS}&scope=minidumpster`,
         {
             method: 'POST',
             body: form,

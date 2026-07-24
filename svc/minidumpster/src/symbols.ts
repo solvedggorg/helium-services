@@ -28,10 +28,6 @@ export interface SymbolsOptions {
     symsorterBin?: string;
 }
 
-// Must outlast caches.downloaded.retry_misses_after in symbolicator.config.yml,
-// or requeued reports would just be served the cached misses again.
-const SYMBOLS_REQUEUE_DELAY_MS = 10 * 60 * 1000;
-
 function bearerToken(req: Request): string | null {
     const h = req.headers.get('authorization') ?? '';
     const m = /^Bearer\s+(.+)$/i.exec(h);
@@ -293,7 +289,7 @@ function requeueSymbolResult(
     const requeued = db.requeueUnsymbolicated(
         result.product,
         result.version,
-        Date.now() + SYMBOLS_REQUEUE_DELAY_MS,
+        Date.now(),
     );
     if (requeued > 0) {
         logEvent('symbols_requeue', {

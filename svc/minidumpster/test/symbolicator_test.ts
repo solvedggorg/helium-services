@@ -119,7 +119,7 @@ Deno.test('Symbolicator reuses one deadline signal for POST and polling', async 
     assertEquals(
         urls,
         [
-            'http://symbolicator.test/minidump?timeout=300',
+            'http://symbolicator.test/minidump?timeout=300&scope=minidumpster',
             'http://symbolicator.test/requests/request-1?timeout=300',
         ],
     );

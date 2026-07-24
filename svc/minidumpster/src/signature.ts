@@ -19,7 +19,7 @@ export interface SymStacktrace {
     frames: SymFrame[];
 }
 
-export interface SymModule {
+interface SymModule {
     debug_id?: string;
     code_file?: string | null;
     debug_file?: string | null;
@@ -42,7 +42,7 @@ export interface SymbolicatorResponse {
     modules?: SymModule[];
 }
 
-export interface SignatureResult {
+interface SignatureResult {
     signature: string;
     title: string;
     symbolicated: boolean;

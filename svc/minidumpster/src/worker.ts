@@ -18,7 +18,7 @@ import {
     symbolicateMinidump,
 } from './symbolicator.ts';
 
-export interface WorkerDeps {
+interface WorkerDeps {
     db: Db;
     config: Config;
     fetchFn?: typeof fetch;

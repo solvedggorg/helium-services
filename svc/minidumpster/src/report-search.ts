@@ -3,7 +3,7 @@ import { logError, logEvent } from './log.ts';
 import { processedPath } from './paths.ts';
 import type { SymbolicatorResponse } from './signature.ts';
 
-export function functionSearchText(response: SymbolicatorResponse): string {
+function functionSearchText(response: SymbolicatorResponse): string {
     const names = new Set<string>();
 
     for (const trace of response.stacktraces ?? []) {

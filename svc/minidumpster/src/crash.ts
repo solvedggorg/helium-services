@@ -4,7 +4,7 @@ export class HttpError extends Error {
     }
 }
 
-export interface ParsedCrash {
+interface ParsedCrash {
     dump: Uint8Array;
     annotations: Record<string, string>;
 }

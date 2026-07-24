@@ -132,7 +132,7 @@ function csv(joined: string | null): string[] {
     return (joined ?? '').split(',').filter(Boolean);
 }
 
-export interface GroupsPageData {
+interface GroupsPageData {
     groups: GroupListRow[];
     stats: { day: string; n: number }[];
     options: { products: string[]; versions: string[]; platforms: string[] };
@@ -291,7 +291,7 @@ export function uploadPage(user: string, error?: string): string {
     });
 }
 
-export interface SymbolsPageData {
+interface SymbolsPageData {
     artifacts: ArtifactIngestRow[];
     bundles: { id: string; updatedAt: number | null }[];
 }

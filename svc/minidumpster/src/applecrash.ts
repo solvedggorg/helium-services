@@ -1,4 +1,4 @@
-export interface AppleCrashMeta {
+interface AppleCrashMeta {
     process: string | null;
     identifier: string | null;
     version: string | null;

@@ -4,7 +4,7 @@ import type { SymbolicatorResponse } from './signature.ts';
 
 const REQUEST_TIMEOUT_SECONDS = 5 * 60;
 
-export interface SymbolicateOptions {
+interface SymbolicateOptions {
     fetchFn?: typeof fetch;
     /** Delay between polls when Symbolicator doesn't suggest one. */
     pollIntervalMs?: number;

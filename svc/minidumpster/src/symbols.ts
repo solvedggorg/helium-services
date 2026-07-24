@@ -11,7 +11,7 @@ import { streamMultipartToDisk } from './multipart.ts';
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SYMSORTER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-export interface SymbolIngestResult {
+interface SymbolIngestResult {
     ok: true;
     product: string;
     version: string;

@@ -549,6 +549,8 @@ Deno.test('symbols upload requeues unsymbolicated reports, which then regroup', 
             1,
         );
         assertEquals(env.db.getReport(id)!.status, 'pending');
+        assertEquals(env.db.getReport(id)!.group_id, null);
+        assertEquals(env.db.getGroup(junkGroupId), null);
         assertEquals(
             env.db.claimNext(Date.now()),
             null,

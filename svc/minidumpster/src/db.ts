@@ -349,17 +349,30 @@ export class Db {
         version: string,
         notBefore: number,
     ): number {
-        const res = this.db.prepare(
-            `UPDATE reports
-             SET status = 'pending', attempts = 0,
-                 next_attempt_at = ?, error = NULL
-             WHERE status = 'processed'
-               AND symbolicated = 0
-               AND product = ? COLLATE NOCASE
-               AND version = ?`,
-        ).run(notBefore, product, version);
+        return this.inWriteTransaction(() => {
+            const reports = this.many<{ group_id: number | null }>(
+                `SELECT group_id
+                 FROM reports
+                 WHERE status = 'processed'
+                   AND symbolicated = 0
+                   AND product = ? COLLATE NOCASE
+                   AND version = ?`,
+                product,
+                version,
+            );
+            this.db.prepare(
+                `UPDATE reports
+                 SET status = 'pending', group_id = NULL, attempts = 0,
+                     next_attempt_at = ?, error = NULL
+                 WHERE status = 'processed'
+                   AND symbolicated = 0
+                   AND product = ? COLLATE NOCASE
+                   AND version = ?`,
+            ).run(notBefore, product, version);
+            this.recountGroups(reports.map((report) => report.group_id));
 
-        return Number(res.changes);
+            return reports.length;
+        });
     }
 
     markRetry(
@@ -377,15 +390,29 @@ export class Db {
     }
 
     requeueReport(id: string): boolean {
-        const res = this.db.prepare(
-            `UPDATE reports
-             SET status = 'pending', error = NULL,
-                 attempts = 0, next_attempt_at = 0
-             WHERE id = ?
-               AND status = 'processed'`,
-        ).run(id);
+        return this.inWriteTransaction(() => {
+            const report = this.one<{ group_id: number | null }>(
+                `SELECT group_id
+                 FROM reports
+                 WHERE id = ?
+                   AND status = 'processed'`,
+                id,
+            );
+            if (!report) {
+                return false;
+            }
 
-        return Number(res.changes) > 0;
+            this.db.prepare(
+                `UPDATE reports
+                 SET status = 'pending', group_id = NULL, error = NULL,
+                     attempts = 0, next_attempt_at = 0
+                 WHERE id = ?
+                   AND status = 'processed'`,
+            ).run(id);
+            this.recountGroups([report.group_id]);
+
+            return true;
+        });
     }
 
     registerArtifact(

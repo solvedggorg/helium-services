@@ -305,7 +305,8 @@ Deno.test('processed reports can be manually requeued', async () => {
         assertEquals(requeued.status, 'pending');
         assertEquals(requeued.attempts, 0);
         assertEquals(requeued.next_attempt_at, 0);
-        assertEquals(requeued.group_id, groupId);
+        assertEquals(requeued.group_id, null);
+        assertEquals(env.db.getGroup(groupId), null);
 
         const again = await app.request(`/reports/${id}/reprocess`, {
             method: 'POST',

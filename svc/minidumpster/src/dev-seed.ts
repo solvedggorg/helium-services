@@ -7,6 +7,7 @@ import {
     processedPath,
     writeFileWithDirs,
 } from './paths.ts';
+import { backfillReportSearch } from './report-search.ts';
 import type { SymbolicatorResponse } from './signature.ts';
 
 const HOUR = 60 * 60 * 1000;
@@ -274,6 +275,7 @@ export async function seedDevData(
         now + HOUR,
         false,
     );
+    await backfillReportSearch(db, config.dataDir);
 
     return { reportsCreated, reportsTotal: REPORTS.length + 1 };
 }

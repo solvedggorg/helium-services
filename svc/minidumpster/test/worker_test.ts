@@ -122,6 +122,10 @@ Deno.test('worker follows the pending/poll protocol and groups the report', asyn
             await Deno.readTextFile(processedPath(env.dir, claimed.id)),
         );
         assertEquals(processed.status, 'completed');
+        assertEquals(
+            env.db.searchReports('RenderProcessHostImpl').map((r) => r.id),
+            [claimed.id],
+        );
     } finally {
         await env.cleanup();
     }

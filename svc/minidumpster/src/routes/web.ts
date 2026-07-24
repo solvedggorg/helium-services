@@ -104,7 +104,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             return c.html(
                 ui.messagePage(
                     'Search',
-                    'Enter at least 4 characters of a report id or guid.',
+                    'Enter at least 4 characters of a report id, guid, or function name.',
                     login,
                 ),
                 400,

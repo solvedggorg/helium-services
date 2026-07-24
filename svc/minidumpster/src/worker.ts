@@ -5,6 +5,7 @@ import type { Config } from './config.ts';
 import { logError, logEvent } from './log.ts';
 import { normalizeAppleCrashReport } from './applecrash.ts';
 import { deleteReportAndPayload } from './reports.ts';
+import { indexReportResponse } from './report-search.ts';
 import { dumpPath, processedPath, writeFileWithDirs } from './paths.ts';
 import {
     computeSignature,
@@ -79,6 +80,13 @@ export async function processReport(
             attempts,
         );
         db.recountGroups([report.group_id, groupId]);
+        try {
+            indexReportResponse(db, report.id, resp);
+        } catch (err) {
+            logError('report_search_index_error', err, {
+                report_id: report.id,
+            });
+        }
 
         logEvent('report_processed', {
             report_id: report.id,

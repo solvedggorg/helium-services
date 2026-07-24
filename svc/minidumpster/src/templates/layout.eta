@@ -20,7 +20,7 @@
   <span class="muted">symbols</span>
   <% } else { %><a href="/symbols">symbols</a><% } %>
   <form class="search" method="get" action="/search">
-    <input name="q" placeholder="report id / guid" minlength="4">
+    <input name="q" placeholder="report id / guid / function" minlength="4">
   </form>
   <% if (it.user) { %>
   <span class="user"><%= it.user %> · <a href="/auth/logout">logout</a></span>

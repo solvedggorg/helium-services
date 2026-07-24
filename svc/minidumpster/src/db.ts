@@ -98,6 +98,15 @@ CREATE INDEX IF NOT EXISTS idx_reports_queue
   ON reports(status, next_attempt_at, received_at);
 CREATE INDEX IF NOT EXISTS idx_reports_group ON reports(group_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_reports_prod_ver ON reports(product, version);
+CREATE VIRTUAL TABLE IF NOT EXISTS report_search USING fts5(
+  report_id UNINDEXED,
+  functions
+);
+CREATE TRIGGER IF NOT EXISTS reports_search_delete
+AFTER DELETE ON reports
+BEGIN
+  DELETE FROM report_search WHERE report_id = old.id;
+END;
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   signature TEXT UNIQUE NOT NULL,
@@ -217,7 +226,7 @@ export class Db {
             return [];
         }
 
-        return this.many<ReportRow>(
+        const direct = this.many<ReportRow>(
             `SELECT *
              FROM reports
              WHERE id = ?
@@ -232,6 +241,56 @@ export class Db {
             `${q}%`,
             limit,
         );
+
+        const terms = q.match(/[\p{L}\p{N}_]+/gu);
+        if (!terms || direct.length >= limit) {
+            return direct;
+        }
+
+        const ftsQuery = terms.map((term) => `"${term}"*`).join(' AND ');
+        const fullText = this.many<ReportRow>(
+            `SELECT reports.*
+             FROM report_search
+             JOIN reports ON reports.id = report_search.report_id
+             WHERE report_search MATCH ?
+               AND reports.status = 'processed'
+             ORDER BY report_search.rank, reports.received_at DESC
+             LIMIT ?`,
+            ftsQuery,
+            limit,
+        );
+        const seen = new Set(direct.map((report) => report.id));
+
+        return direct.concat(
+            fullText.filter((report) => !seen.has(report.id)),
+        ).slice(0, limit);
+    }
+
+    indexReportFunctions(reportId: string, functions: string): void {
+        this.inWriteTransaction(() => {
+            this.db.prepare(
+                `DELETE FROM report_search
+                 WHERE report_id = ?`,
+            ).run(reportId);
+            this.db.prepare(
+                `INSERT INTO report_search (report_id, functions)
+                 VALUES (?, ?)`,
+            ).run(reportId, functions);
+        });
+    }
+
+    reportsMissingSearchIndex(): string[] {
+        return this.many<{ id: string }>(
+            `SELECT reports.id
+             FROM reports
+             WHERE reports.status = 'processed'
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM report_search
+                   WHERE report_search.report_id = reports.id
+               )
+             ORDER BY reports.received_at`,
+        ).map((report) => report.id);
     }
 
     claimNext(now: number): ReportRow | null {

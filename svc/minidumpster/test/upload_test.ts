@@ -396,7 +396,7 @@ Deno.test('worker symbolicates Apple reports via /applecrashreport', async () =>
     }
 });
 
-Deno.test('search finds reports by id, id prefix, and guid', async () => {
+Deno.test('search finds reports by id, guid, and function name', async () => {
     const env = await makeTestEnv();
     try {
         const app = buildApp({ config: env.config, db: env.db });
@@ -436,6 +436,38 @@ Deno.test('search finds reports by id, id prefix, and guid', async () => {
         );
         assertEquals(byGuid.status, 302);
         assertEquals(byGuid.headers.get('location'), `/reports/${id}`);
+
+        const groupId = env.db.upsertGroup(
+            'search-function',
+            'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+            Date.now(),
+        );
+        env.db.markProcessed(id, groupId, 'Windows', Date.now(), true, 1);
+        env.db.indexReportFunctions(
+            id,
+            'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+        );
+
+        const byFunction = await app.request(
+            `/search?${new URLSearchParams({
+                q: 'RenderWidgetHostImpl',
+            })}`,
+            { headers: { cookie } },
+        );
+        assertEquals(byFunction.status, 302);
+        assertEquals(byFunction.headers.get('location'), `/reports/${id}`);
+
+        const byQualifiedFunction = await app.request(
+            `/search?${new URLSearchParams({
+                q: 'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+            })}`,
+            { headers: { cookie } },
+        );
+        assertEquals(byQualifiedFunction.status, 302);
+        assertEquals(
+            byQualifiedFunction.headers.get('location'),
+            `/reports/${id}`,
+        );
 
         // No match → results page, not an error.
         const none = await app.request('/search?q=ffffffff', {

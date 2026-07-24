@@ -5,6 +5,7 @@ import type { Config } from './config.ts';
 import { logError, logEvent } from './log.ts';
 import { normalizeAppleCrashReport } from './applecrash.ts';
 import { deleteReportAndPayload } from './reports.ts';
+import { crashDiscardReason } from './report-policy.ts';
 import { indexReportResponse } from './report-search.ts';
 import { dumpPath, processedPath, writeFileWithDirs } from './paths.ts';
 import {
@@ -53,6 +54,16 @@ export async function processReport(
             deleteReportAndPayload(db, config, report.id);
             logEvent('report_rejected', {
                 report_id: report.id,
+                attempts,
+            });
+            return;
+        }
+        const discardReason = crashDiscardReason(resp);
+        if (discardReason) {
+            deleteReportAndPayload(db, config, report.id);
+            logEvent('report_discarded_non_actionable', {
+                report_id: report.id,
+                reason: discardReason,
                 attempts,
             });
             return;

@@ -378,6 +378,34 @@ Deno.test('worker drops raw data rejected by Symbolicator parsing', async () => 
     }
 });
 
+Deno.test('worker drops non-actionable crashes after symbolication', async () => {
+    const response = JSON.parse(
+        await fixtureResponse(),
+    );
+    response.stacktraces[0].frames[1].function =
+        'partition_alloc::TerminateBecauseOutOfMemory(unsigned long long)';
+    const mock = mockSymbolicator(JSON.stringify(response), 0);
+    const env = await makeTestEnv();
+    try {
+        const id = crypto.randomUUID();
+        await insertPendingReport(env, id);
+        const claimed = env.db.claimNext(Date.now());
+        assert(claimed);
+
+        await processReport({
+            db: env.db,
+            config: env.config,
+            fetchFn: mock.fetchFn,
+            pollIntervalMs: 5,
+        }, claimed);
+
+        await assertPayloadDiscarded(env, id);
+        assertEquals(env.db.reportsPerDay(0), []);
+    } finally {
+        await env.cleanup();
+    }
+});
+
 Deno.test('retention deletes expired reports and all of their files', async () => {
     const env = await makeTestEnv({ retentionDays: 30 });
     const now = Date.now();

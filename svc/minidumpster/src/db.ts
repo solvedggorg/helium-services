@@ -522,8 +522,10 @@ export class Db {
     recountGroups(ids: (number | null)[]): void {
         const recount = this.db.prepare(
             `UPDATE groups
-             SET report_count = (
-                 SELECT COUNT(*)
+             SET (report_count, first_seen, last_seen) = (
+                 SELECT COUNT(*),
+                        COALESCE(MIN(r.received_at), groups.first_seen),
+                        COALESCE(MAX(r.received_at), groups.last_seen)
                  FROM reports r
                  WHERE r.group_id = groups.id
              )

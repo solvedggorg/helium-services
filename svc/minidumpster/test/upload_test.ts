@@ -264,6 +264,9 @@ Deno.test('processed reports can be manually requeued', async () => {
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
         const id = crypto.randomUUID();
+        const remainingId = crypto.randomUUID();
+        const remainingAt = Date.now() - 60_000;
+        const requeuedAt = Date.now();
         await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
         await writeFileWithDirs(
             processedPath(env.dir, id),
@@ -277,14 +280,32 @@ Deno.test('processed reports can be manually requeued', async () => {
             ptype: null,
             channel: null,
             annotations: '{}',
-            received_at: Date.now(),
+            received_at: requeuedAt,
         });
         const groupId = env.db.upsertGroup(
             'manual-requeue',
             'Crash()',
-            Date.now(),
+            requeuedAt,
         );
-        env.db.markProcessed(id, groupId, 'macOS', Date.now(), true, 3);
+        env.db.insertReport({
+            id: remainingId,
+            product: 'Helium',
+            version: '1.0',
+            guid: null,
+            ptype: null,
+            channel: null,
+            annotations: '{}',
+            received_at: remainingAt,
+        });
+        env.db.markProcessed(
+            remainingId,
+            groupId,
+            'macOS',
+            remainingAt,
+            true,
+            1,
+        );
+        env.db.markProcessed(id, groupId, 'macOS', requeuedAt, true, 3);
         env.db.recountGroups([groupId]);
 
         const page = await app.request(`/reports/${id}`, {
@@ -306,7 +327,10 @@ Deno.test('processed reports can be manually requeued', async () => {
         assertEquals(requeued.attempts, 0);
         assertEquals(requeued.next_attempt_at, 0);
         assertEquals(requeued.group_id, null);
-        assertEquals(env.db.getGroup(groupId), null);
+        const group = env.db.getGroup(groupId)!;
+        assertEquals(group.report_count, 1);
+        assertEquals(group.first_seen, remainingAt);
+        assertEquals(group.last_seen, remainingAt);
 
         const again = await app.request(`/reports/${id}/reprocess`, {
             method: 'POST',

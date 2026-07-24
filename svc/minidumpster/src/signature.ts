@@ -229,8 +229,6 @@ export function platformFromResponse(
         return null;
     }
 
-    // Apple crash reports carry the full "macOS 26.5.1 (25F80)" string —
-    // collapse to a family name so filters group properly.
     if (/^mac\s?os/i.test(raw)) {
         return 'macOS';
     }

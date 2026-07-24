@@ -5,10 +5,10 @@ import { collapseCppName, groupsPage, symbolsPage } from '../src/ui.ts';
 const MONSTER =
     'base::internal::Invoker<base::internal::FunctorTraits<base::IgnoreArgs<tabs::TabInterface*, , void>(base::RepeatingCallback<void ()>)::{lambda(base::RepeatingCallback<void ()> const, tabs::TabInterface*)#1}&, base::RepeatingCallback<void ()> const&>, base::internal::BindState<false, false, false, base::IgnoreArgs<tabs::TabInterface*, , void>(base::RepeatingCallback<void ()>)::{lambda(base::RepeatingCallback<void ()>, tabs::TabInterface*)#1}, base::RepeatingCallback<void ()> >, void (tabs::TabInterface*)>::Run(base::internal::BindStateBase*, tabs::TabInterface*)';
 
-Deno.test('collapseCppName folds huge template arguments to <…>', () => {
+Deno.test('collapseCppName folds huge template arguments', () => {
     assertEquals(
         collapseCppName(MONSTER),
-        'base::internal::Invoker<…>::Run(base::internal::BindStateBase*, tabs::TabInterface*)',
+        'base::internal::Invoker<\u{2026}>::Run(base::internal::BindStateBase*, tabs::TabInterface*)',
     );
 });
 
@@ -40,7 +40,7 @@ Deno.test('collapseCppName is not fooled by comparison operators', () => {
         'bool std::operator<(std::pair<AVeryLongTypeNameForTesting, AVeryLongTypeNameForTesting> const&, std::pair<AVeryLongTypeNameForTesting, AVeryLongTypeNameForTesting> const&)';
     const out = collapseCppName(name);
     assert(out.startsWith('bool std::operator<('));
-    assert(out.includes('std::pair<…>'));
+    assert(out.includes('std::pair<\u{2026}>'));
 });
 
 Deno.test('collapseCppName leaves unbalanced input untouched', () => {

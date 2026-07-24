@@ -576,10 +576,10 @@ Deno.test('symbol retention expires old bundles but keeps shared debug files', a
         const past = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
         await Deno.utime(`${symRoot}/bundles/helium-1.0.0`, past, past);
 
-        // Debug file only in the old build → should be deleted entirely.
+        // Debug file only in the old build -> should be deleted entirely.
         await mk('aa/aa1111/debuginfo');
         await mk('aa/aa1111/refs/helium-1.0.0');
-        // Debug file shared by both builds → keeps its dir, loses the old ref.
+        // Debug file shared by both builds -> keeps its dir, loses the old ref.
         await mk('bb/bb2222/debuginfo');
         await mk('bb/bb2222/refs/helium-1.0.0');
         await mk('bb/bb2222/refs/helium-2.0.0');

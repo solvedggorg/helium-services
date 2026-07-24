@@ -65,7 +65,7 @@ Deno.test('pasted Apple crash reports are filed and deduped by incident id', asy
         const stored = await Deno.readTextFile(dumpPath(env.dir, id));
         assert(stored.includes('Thread 0 Crashed'));
 
-        // Same incident again → redirected to the existing report.
+        // Same incident again -> redirected to the existing report.
         const again = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -154,7 +154,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         assertEquals(ok.status, 302);
 
         const oversized = new FormData();
-        oversized.append('text', `${submitted}é`);
+        oversized.append('text', `${submitted}\u{e9}`);
         const tooLarge = await encodeMultipart(oversized);
         const rejected = await app.request('/upload', {
             method: 'POST',
@@ -170,7 +170,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         const oversizedFile = new FormData();
         oversizedFile.append(
             'file',
-            new Blob([`${normalized}é`]),
+            new Blob([`${normalized}\u{e9}`]),
             'report.crash',
         );
         const fileRejected = await app.request('/upload', {
@@ -414,7 +414,7 @@ Deno.test('search finds reports by id, guid, and function name', async () => {
             received_at: Date.now(),
         });
 
-        // Full id → direct redirect (case-insensitive).
+        // Full id -> direct redirect (case-insensitive).
         const byId = await app.request(
             `/search?q=${id.toUpperCase()}`,
             { headers: { cookie } },
@@ -422,14 +422,14 @@ Deno.test('search finds reports by id, guid, and function name', async () => {
         assertEquals(byId.status, 302);
         assertEquals(byId.headers.get('location'), `/reports/${id}`);
 
-        // 8-char prefix, as shown in the UI → redirect.
+        // 8-char prefix, as shown in the UI -> redirect.
         const byPrefix = await app.request(`/search?q=${id.slice(0, 8)}`, {
             headers: { cookie },
         });
         assertEquals(byPrefix.status, 302);
         assertEquals(byPrefix.headers.get('location'), `/reports/${id}`);
 
-        // Guid (lowercased by the user) → redirect.
+        // Guid (lowercased by the user) -> redirect.
         const byGuid = await app.request(
             `/search?q=${guid.toLowerCase()}`,
             { headers: { cookie } },
@@ -469,7 +469,7 @@ Deno.test('search finds reports by id, guid, and function name', async () => {
             `/reports/${id}`,
         );
 
-        // No match → results page, not an error.
+        // No match -> results page, not an error.
         const none = await app.request('/search?q=ffffffff', {
             headers: { cookie },
         });

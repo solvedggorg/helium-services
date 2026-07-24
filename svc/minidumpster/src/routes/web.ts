@@ -70,10 +70,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     const { config, db } = deps;
     const app = new Hono<Env>();
 
-    // Registered before the session gate: login/denied pages use the shared
-    // layout, so its static assets must be public.
     app.use('/static/*', serveStatic({ root: './src' }));
-
     app.use('*', deps.webAuth ?? requireSession(config));
     app.use('*', disablePrivateResponseCaching);
 

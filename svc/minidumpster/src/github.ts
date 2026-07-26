@@ -68,22 +68,16 @@ export function githubIssueUrl(
         group?.title ?? response.crash_reason ?? 'Helium crash',
     );
     const reason = oneLine(response.crash_reason ?? 'Unknown');
-    const reportUrl = `${publicBaseUrl}/reports/${
-        encodeURIComponent(report.id)
-    }`;
     const thread = crashingThread(response);
     const frames = thread?.frames.slice(0, MAX_ISSUE_FRAMES) ?? [];
     const stack = frames.map(frameLine);
     if (thread && thread.frames.length > frames.length) {
         stack.push(
-            `... ${
-                thread.frames.length - frames.length
-            } more frames in ${reportUrl}`,
+            `... ${thread.frames.length - frames.length} more frames`,
         );
     }
 
     const additional = [
-        `Minidumpster report: ${reportUrl}`,
         `Crash reason: ${reason}`,
         '',
         '### Crashing thread',
@@ -109,6 +103,7 @@ export function githubIssueUrl(
         url.searchParams.set('version', oneLine(report.version));
     }
     url.searchParams.set('description', title);
+    url.searchParams.set('crashid', report.id);
     url.searchParams.set('actual', `Helium crashed: ${reason}`);
     url.searchParams.set('expected', 'Helium should not crash.');
     url.searchParams.set('additional', additional);

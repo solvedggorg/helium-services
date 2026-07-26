@@ -31,6 +31,7 @@ function securityHeaders(config: Config): MiddlewareHandler<Env> {
             scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'"],
+            connectSrc: ["'self'"],
             formAction: ["'self'"],
             baseUri: ["'none'"],
             frameAncestors: ["'none'"],

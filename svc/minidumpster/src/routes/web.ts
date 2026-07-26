@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from 'hono';
+import { accepts } from 'hono/accepts';
 import { serveStatic } from 'hono/deno';
 
 import * as ui from '../ui.ts';
@@ -269,11 +270,30 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             ? db.getGroup(report.group_id)
             : null;
 
+        const responseType = accepts(c, {
+            header: 'Accept',
+            supports: ['text/html', 'text/plain'],
+            default: 'text/html',
+        });
+        const wantsPlain = responseType === 'text/plain';
         let stack: string | null = null;
         let issueUrl: string | null = null;
+        let hasProcessedResponse = false;
         if (report.status === 'processed') {
             const resp = await readProcessed(config.dataDir, report.id);
             if (resp) {
+                hasProcessedResponse = true;
+                if (wantsPlain) {
+                    return c.text(
+                        ui.reportCopyText(
+                            report,
+                            group,
+                            resp,
+                        ),
+                        200,
+                        { 'content-type': 'text/plain; charset=utf-8' },
+                    );
+                }
                 stack = ui.stackHtml(resp, true);
                 if (config.githubIssueRepo && config.githubIssueTemplate) {
                     issueUrl = githubIssueUrl(
@@ -288,11 +308,16 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             }
         }
 
+        if (wantsPlain) {
+            return c.text('not found\n', 404);
+        }
+
         return c.html(
             ui.reportPage(
                 report,
                 group,
                 stack,
+                hasProcessedResponse,
                 issueUrl,
                 reportExpiresAt(
                     report.received_at,

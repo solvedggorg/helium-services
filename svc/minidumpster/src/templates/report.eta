@@ -37,6 +37,9 @@
 <a class="button" href="<%= it.githubIssueUrl %>" target="_blank"
    rel="noopener noreferrer">Open GitHub issue</a>
 <% } %>
+<% if (it.hasProcessedResponse) { %>
+<button type="button" data-copy-report>Copy</button>
+<% } %>
 <% if (it.report.status === 'processed') { %>
 <form method="post" action="/reports/<%= it.report.id %>/reprocess">
   <button type="submit">Reprocess report</button>

@@ -1,5 +1,6 @@
 import { Eta } from 'eta';
 import { fromFileUrl } from '@std/path';
+import { basename } from '@std/path/windows';
 
 import type {
     ArtifactIngestRow,
@@ -132,7 +133,7 @@ function csv(joined: string | null): string[] {
     return (joined ?? '').split(',').filter(Boolean);
 }
 
-export interface GroupsPageData {
+interface GroupsPageData {
     groups: GroupListRow[];
     stats: { day: string; n: number }[];
     options: { products: string[]; versions: string[]; platforms: string[] };
@@ -202,16 +203,11 @@ export function groupsPage(data: GroupsPageData, user?: string): string {
 }
 
 function frameView(f: SymFrame) {
-    let loc = '';
-    if (f.filename) {
-        loc = f.lineno != null ? `${f.filename}:${f.lineno}` : f.filename;
-    }
-
     return {
         fn: f.function ?? f.symbol ?? null,
         addr: f.instruction_addr ?? '?',
-        loc,
-        mod: f.package?.split(/[\\/]/).pop() ?? '',
+        loc: frameLocation(f) ?? '',
+        mod: frameModule(f) ?? '',
     };
 }
 
@@ -224,6 +220,115 @@ function threadView(t: SymStacktrace, crashed: boolean) {
     };
 }
 
+function frameFunction(f: SymFrame): string | null {
+    return f.function ?? f.symbol ?? null;
+}
+
+function frameLocation(f: SymFrame): string | null {
+    if (!f.filename) {
+        return null;
+    }
+
+    return typeof f.lineno === 'number'
+        ? `${f.filename}:${f.lineno}`
+        : f.filename;
+}
+
+function frameModule(f: SymFrame): string | null {
+    return f.package ? basename(f.package) : null;
+}
+
+function systemInfo(resp: SymbolicatorResponse): string {
+    const sys = resp.system_info;
+    return [
+        sys?.os_name,
+        sys?.os_version,
+        sys?.cpu_arch,
+    ].filter((a) => a).join(' ');
+}
+
+function frameText(f: SymFrame, index: number): string {
+    const fn = frameFunction(f) ?? f.instruction_addr ?? '?';
+    const parts = [`#${index}`, fn];
+    const loc = frameLocation(f);
+    if (loc) {
+        parts.push(`at ${loc}`);
+    }
+    const mod = frameModule(f);
+    if (mod) {
+        parts.push(`in ${mod}`);
+    }
+    if (f.instruction_addr) {
+        parts.push(`[${f.instruction_addr}]`);
+    }
+
+    return parts.join(' ');
+}
+
+export function reportCopyText(
+    report: ReportRow,
+    group: GroupRow | null,
+    resp: SymbolicatorResponse,
+): string {
+    const annotations = Object.entries(
+        JSON.parse(report.annotations || '{}') as Record<string, string>,
+    );
+    const crashing = crashingThread(resp);
+    const sections: string[] = [];
+    const summary = ['# Crash report'];
+    const maybePush = (
+        name: string,
+        value: string | number | null | undefined,
+    ) => {
+        const text = String(value ?? '').trim();
+        if (text) {
+            summary.push(`${name}: ${text}`);
+        }
+    };
+
+    maybePush('Report ID', report.id);
+    maybePush('Group', group?.title);
+    maybePush('Product', report.product);
+    maybePush('Version', report.version);
+    maybePush('Platform', report.platform);
+    maybePush('Process Type', report.ptype);
+    maybePush('Channel', report.channel);
+    maybePush('Crash Reason', resp.crash_reason);
+    maybePush('Crash Details', resp.crash_details);
+    maybePush('System', systemInfo(resp));
+    sections.push(summary.join('\n'));
+
+    if (annotations.length > 0) {
+        sections.push([
+            '## Annotations',
+            ...annotations.map(([key, value]) => `${key}: ${value}`),
+        ].join('\n'));
+    }
+
+    const traces = resp.stacktraces ?? [];
+    if (crashing) {
+        const name = crashing.thread_name ? ` (${crashing.thread_name})` : '';
+        sections.push([
+            `## Crashing thread ${crashing.thread_id ?? '?'}${name}`,
+            ...crashing.frames.map(frameText),
+        ].join('\n'));
+    }
+
+    const otherThreads = traces.filter((t) => t !== crashing);
+    if (otherThreads.length > 0) {
+        const lines = ['## Other threads'];
+        for (const thread of otherThreads) {
+            const name = thread.thread_name ? ` (${thread.thread_name})` : '';
+            lines.push(`Thread ${thread.thread_id ?? '?'}${name}`);
+            lines.push(...thread.frames.map(frameText));
+            lines.push('');
+        }
+        sections.push(lines.join('\n').trimEnd());
+    }
+
+    return sections.join('\n\n') + '\n';
+}
+
 export function stackHtml(
     resp: SymbolicatorResponse,
     allThreads: boolean,
@@ -231,16 +336,11 @@ export function stackHtml(
     const traces = resp.stacktraces ?? [];
     const crashing = crashingThread(resp);
     const shown = allThreads ? traces : crashing ? [crashing] : [];
-    const sys = resp.system_info;
 
     return render('stack', {
         hasTraces: traces.length > 0,
         crashReason: resp.crash_reason ?? '',
-        sysInfo: sys
-            ? `${sys.os_name ?? ''} ${sys.os_version ?? ''} ${
-                sys.cpu_arch ?? ''
-            }`
-            : '',
+        sysInfo: systemInfo(resp),
         threads: shown.map((t) => threadView(t, t === crashing)),
     });
 }
@@ -264,6 +364,8 @@ export function reportPage(
     report: ReportRow,
     group: GroupRow | null,
     stack: string | null,
+    hasProcessedResponse: boolean,
+    githubIssueUrl: string | null,
     retentionDeadline: number,
     user?: string,
 ): string {
@@ -277,6 +379,8 @@ export function reportPage(
         report,
         group,
         stack,
+        hasProcessedResponse,
+        githubIssueUrl,
         annotations,
         retentionDeadline,
     });
@@ -291,7 +395,7 @@ export function uploadPage(user: string, error?: string): string {
     });
 }
 
-export interface SymbolsPageData {
+interface SymbolsPageData {
     artifacts: ArtifactIngestRow[];
     bundles: { id: string; updatedAt: number | null }[];
 }

@@ -1,4 +1,4 @@
-export interface AppleCrashMeta {
+interface AppleCrashMeta {
     process: string | null;
     identifier: string | null;
     version: string | null;
@@ -89,7 +89,7 @@ export function normalizeAppleCrashReport(text: string): string {
 
         if (inBinaryImages) {
             const img = MODERN_IMAGE_RE.exec(line);
-            // Classic lines already end the name field with an arch token —
+            // Classic lines already end the name field with an arch token,
             // only modern lines (no arch column) get one inserted.
             if (img && !/\s(?:arm64e?|x86_64|i386|unknown)$/.test(img[2])) {
                 out.push(`${img[1]}${img[2]} ${arch} ${img[3] ?? ''}${img[4]}`);

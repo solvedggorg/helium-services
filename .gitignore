@@ -13,3 +13,4 @@ compose.override.yml
 
 # minidumpster runtime data contains sensitive crash reports
 svc/minidumpster/data/
+svc/minidumpster/.dev-data/

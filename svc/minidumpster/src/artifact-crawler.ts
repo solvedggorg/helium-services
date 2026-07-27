@@ -58,7 +58,7 @@ interface GithubJobsPage {
     jobs: Array<{ name: string; conclusion: string | null }>;
 }
 
-export interface ArtifactCrawlerDeps {
+interface ArtifactCrawlerDeps {
     db: Db;
     config: Config;
     fetchFn?: typeof fetch;

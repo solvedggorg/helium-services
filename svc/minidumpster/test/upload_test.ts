@@ -1,4 +1,4 @@
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertFalse, assertRejects } from '@std/assert';
 import { DatabaseSync } from 'node:sqlite';
 
 import { buildApp } from '../src/app.ts';
@@ -11,6 +11,8 @@ import {
 } from '../src/paths.ts';
 import { processReport } from '../src/worker.ts';
 import {
+    appleCrashFixture,
+    appleFixtureResponse,
     chunked,
     dirEntries,
     encodeMultipart,
@@ -18,28 +20,13 @@ import {
     testSessionCookie,
 } from './helpers.ts';
 
-function fixture(): Promise<string> {
-    return Deno.readTextFile(
-        new URL('./fixtures/apple_report.txt', import.meta.url),
-    );
-}
-
-function appleFixtureResponse(): Promise<string> {
-    return Deno.readTextFile(
-        new URL(
-            './fixtures/symbolicator_apple_completed.json',
-            import.meta.url,
-        ),
-    );
-}
-
 Deno.test('pasted Apple crash reports are filed and deduped by incident id', async () => {
     const env = await makeTestEnv();
     try {
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
         const form = new FormData();
-        form.append('text', await fixture());
+        form.append('text', await appleCrashFixture());
         const res = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -65,7 +52,7 @@ Deno.test('pasted Apple crash reports are filed and deduped by incident id', asy
         const stored = await Deno.readTextFile(dumpPath(env.dir, id));
         assert(stored.includes('Thread 0 Crashed'));
 
-        // Same incident again → redirected to the existing report.
+        // Same incident again -> redirected to the existing report.
         const again = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -132,7 +119,7 @@ Deno.test('upload rejects non-crash-report input and requires a session', async 
 });
 
 Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes', async () => {
-    const fixtureText = await fixture();
+    const fixtureText = await appleCrashFixture();
     const submitted = fixtureText.trim();
     const normalized = submitted.replace(/\r?\n/g, '\r\n');
     const fixtureBytes = new TextEncoder().encode(normalized).length;
@@ -154,7 +141,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         assertEquals(ok.status, 302);
 
         const oversized = new FormData();
-        oversized.append('text', `${submitted}é`);
+        oversized.append('text', `${submitted}\u{e9}`);
         const tooLarge = await encodeMultipart(oversized);
         const rejected = await app.request('/upload', {
             method: 'POST',
@@ -170,7 +157,7 @@ Deno.test('manual upload streams without Content-Length and enforces UTF-8 bytes
         const oversizedFile = new FormData();
         oversizedFile.append(
             'file',
-            new Blob([`${normalized}é`]),
+            new Blob([`${normalized}\u{e9}`]),
             'report.crash',
         );
         const fileRejected = await app.request('/upload', {
@@ -195,7 +182,7 @@ Deno.test('manual upload removes the payload when database insertion fails', asy
             throw new Error('simulated database failure');
         };
         const form = new FormData();
-        form.append('text', await fixture());
+        form.append('text', await appleCrashFixture());
         const res = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -213,16 +200,15 @@ Deno.test('manual upload removes the payload when database insertion fails', asy
 });
 
 Deno.test('authenticated report responses are not cached', async () => {
-    const env = await makeTestEnv();
+    const env = await makeTestEnv({
+        githubIssueRepo: 'imputnet/helium',
+        githubIssueTemplate: 'bug-report.yml',
+    });
     try {
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
         const id = crypto.randomUUID();
         const receivedAt = Date.now();
-        const retentionDeadline = receivedAt
-            + env.config.retentionDays * 86_400_000;
-        const formattedDeadline = new Date(retentionDeadline).toISOString()
-            .replace('T', ' ').slice(0, 19) + ' UTC';
         await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
         await writeFileWithDirs(processedPath(env.dir, id), '{}');
         env.db.insertReport({
@@ -245,16 +231,11 @@ Deno.test('authenticated report responses are not cached', async () => {
         const initialPage = await app.request(`/reports/${id}`, {
             headers: { cookie },
         });
-        const initialHtml = await initialPage.text();
         assertEquals(
             initialPage.headers.get('cache-control'),
             'private, no-store',
         );
-        assert(
-            initialHtml.includes(
-                `This report will be automatically deleted at ${formattedDeadline}.`,
-            ),
-        );
+        assert((await initialPage.text()).includes('Open GitHub issue'));
 
         const dump = await app.request(`/reports/${id}/dump`, {
             headers: { cookie },
@@ -272,6 +253,225 @@ Deno.test('authenticated report responses are not cached', async () => {
             'private, no-store',
         );
         assertEquals(await processed.text(), '{}');
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('processed reports can be manually requeued', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const id = crypto.randomUUID();
+        const remainingId = crypto.randomUUID();
+        const remainingAt = Date.now() - 60_000;
+        const requeuedAt = Date.now();
+        await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+        await writeFileWithDirs(
+            processedPath(env.dir, id),
+            JSON.stringify({ status: 'completed', stacktraces: [] }),
+        );
+        env.db.insertReport({
+            id,
+            product: 'Helium',
+            version: '1.0',
+            guid: null,
+            ptype: null,
+            channel: null,
+            annotations: '{}',
+            received_at: requeuedAt,
+        });
+        const groupId = env.db.upsertGroup(
+            'manual-requeue',
+            'Crash()',
+            requeuedAt,
+        );
+        env.db.insertReport({
+            id: remainingId,
+            product: 'Helium',
+            version: '1.0',
+            guid: null,
+            ptype: null,
+            channel: null,
+            annotations: '{}',
+            received_at: remainingAt,
+        });
+        env.db.markProcessed(
+            remainingId,
+            groupId,
+            'macOS',
+            remainingAt,
+            true,
+            1,
+        );
+        env.db.markProcessed(id, groupId, 'macOS', requeuedAt, true, 3);
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/reports/${id}`, {
+            headers: { cookie },
+        });
+        const pageText = await page.text();
+        assert(pageText.includes('Reprocess report'));
+        assertFalse(pageText.includes('Open GitHub issue'));
+
+        const response = await app.request(`/reports/${id}/reprocess`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(response.status, 303);
+        assertEquals(response.headers.get('location'), `/reports/${id}`);
+
+        const requeued = env.db.getReport(id)!;
+        assertEquals(requeued.status, 'pending');
+        assertEquals(requeued.attempts, 0);
+        assertEquals(requeued.next_attempt_at, 0);
+        assertEquals(requeued.group_id, null);
+        const group = env.db.getGroup(groupId)!;
+        assertEquals(group.report_count, 1);
+        assertEquals(group.first_seen, remainingAt);
+        assertEquals(group.last_seen, remainingAt);
+
+        const again = await app.request(`/reports/${id}/reprocess`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(again.status, 409);
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('reports can be deleted and empty groups are pruned', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const ids = [crypto.randomUUID(), crypto.randomUUID()];
+        const groupId = env.db.upsertGroup(
+            'report-delete',
+            'Crash()',
+            Date.now(),
+        );
+        for (const id of ids) {
+            await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+            await writeFileWithDirs(processedPath(env.dir, id), '{}');
+            env.db.insertReport({
+                id,
+                product: 'Helium',
+                version: '1.0',
+                guid: null,
+                ptype: null,
+                channel: null,
+                annotations: '{}',
+                received_at: Date.now(),
+            });
+            env.db.markProcessed(
+                id,
+                groupId,
+                'Windows',
+                Date.now(),
+                true,
+                1,
+            );
+        }
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/reports/${ids[0]}`, {
+            headers: { cookie },
+        });
+        assert((await page.text()).includes('Delete report'));
+
+        const first = await app.request(`/reports/${ids[0]}/delete`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(first.status, 303);
+        assertEquals(first.headers.get('location'), `/groups/${groupId}`);
+        assertEquals(env.db.getReport(ids[0]), null);
+        assertEquals(env.db.getGroup(groupId)?.report_count, 1);
+        await assertRejects(
+            () => Deno.stat(dumpPath(env.dir, ids[0])),
+            Deno.errors.NotFound,
+        );
+        await assertRejects(
+            () => Deno.stat(processedPath(env.dir, ids[0])),
+            Deno.errors.NotFound,
+        );
+
+        const second = await app.request(`/reports/${ids[1]}/delete`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(second.status, 303);
+        assertEquals(second.headers.get('location'), '/');
+        assertEquals(env.db.getReport(ids[1]), null);
+        assertEquals(env.db.getGroup(groupId), null);
+    } finally {
+        await env.cleanup();
+    }
+});
+
+Deno.test('groups can be deleted with all reports and payloads', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const ids = [crypto.randomUUID(), crypto.randomUUID()];
+        const groupId = env.db.upsertGroup(
+            'group-delete',
+            'GroupCrash()',
+            Date.now(),
+        );
+        for (const id of ids) {
+            await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+            await writeFileWithDirs(processedPath(env.dir, id), '{}');
+            env.db.insertReport({
+                id,
+                product: 'Helium',
+                version: '1.0',
+                guid: null,
+                ptype: null,
+                channel: null,
+                annotations: '{}',
+                received_at: Date.now(),
+            });
+            env.db.markProcessed(
+                id,
+                groupId,
+                'Windows',
+                Date.now(),
+                true,
+                1,
+            );
+            env.db.indexReportFunctions(id, 'GroupCrash');
+        }
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/groups/${groupId}`, {
+            headers: { cookie },
+        });
+        assert((await page.text()).includes('Delete group'));
+
+        const response = await app.request(`/groups/${groupId}/delete`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(response.status, 303);
+        assertEquals(response.headers.get('location'), '/');
+        assertEquals(env.db.getGroup(groupId), null);
+        assertEquals(env.db.searchReports('GroupCrash'), []);
+        for (const id of ids) {
+            assertEquals(env.db.getReport(id), null);
+            await assertRejects(
+                () => Deno.stat(dumpPath(env.dir, id)),
+                Deno.errors.NotFound,
+            );
+            await assertRejects(
+                () => Deno.stat(processedPath(env.dir, id)),
+                Deno.errors.NotFound,
+            );
+        }
     } finally {
         await env.cleanup();
     }
@@ -301,7 +501,7 @@ Deno.test('worker symbolicates Apple reports via /applecrashreport', async () =>
         const app = buildApp({ config: env.config, db: env.db });
         const cookie = await testSessionCookie(env);
         const form = new FormData();
-        form.append('text', await fixture());
+        form.append('text', await appleCrashFixture());
         const res = await app.request('/upload', {
             method: 'POST',
             headers: { cookie },
@@ -349,7 +549,7 @@ Deno.test('worker symbolicates Apple reports via /applecrashreport', async () =>
     }
 });
 
-Deno.test('search finds reports by id, id prefix, and guid', async () => {
+Deno.test('search finds reports by id, guid, and function name', async () => {
     const env = await makeTestEnv();
     try {
         const app = buildApp({ config: env.config, db: env.db });
@@ -367,7 +567,7 @@ Deno.test('search finds reports by id, id prefix, and guid', async () => {
             received_at: Date.now(),
         });
 
-        // Full id → direct redirect (case-insensitive).
+        // Full id -> direct redirect (case-insensitive).
         const byId = await app.request(
             `/search?q=${id.toUpperCase()}`,
             { headers: { cookie } },
@@ -375,14 +575,14 @@ Deno.test('search finds reports by id, id prefix, and guid', async () => {
         assertEquals(byId.status, 302);
         assertEquals(byId.headers.get('location'), `/reports/${id}`);
 
-        // 8-char prefix, as shown in the UI → redirect.
+        // 8-char prefix, as shown in the UI -> redirect.
         const byPrefix = await app.request(`/search?q=${id.slice(0, 8)}`, {
             headers: { cookie },
         });
         assertEquals(byPrefix.status, 302);
         assertEquals(byPrefix.headers.get('location'), `/reports/${id}`);
 
-        // Guid (lowercased by the user) → redirect.
+        // Guid (lowercased by the user) -> redirect.
         const byGuid = await app.request(
             `/search?q=${guid.toLowerCase()}`,
             { headers: { cookie } },
@@ -390,7 +590,39 @@ Deno.test('search finds reports by id, id prefix, and guid', async () => {
         assertEquals(byGuid.status, 302);
         assertEquals(byGuid.headers.get('location'), `/reports/${id}`);
 
-        // No match → results page, not an error.
+        const groupId = env.db.upsertGroup(
+            'search-function',
+            'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+            Date.now(),
+        );
+        env.db.markProcessed(id, groupId, 'Windows', Date.now(), true, 1);
+        env.db.indexReportFunctions(
+            id,
+            'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+        );
+
+        const byFunction = await app.request(
+            `/search?${new URLSearchParams({
+                q: 'RenderWidgetHostImpl',
+            })}`,
+            { headers: { cookie } },
+        );
+        assertEquals(byFunction.status, 302);
+        assertEquals(byFunction.headers.get('location'), `/reports/${id}`);
+
+        const byQualifiedFunction = await app.request(
+            `/search?${new URLSearchParams({
+                q: 'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+            })}`,
+            { headers: { cookie } },
+        );
+        assertEquals(byQualifiedFunction.status, 302);
+        assertEquals(
+            byQualifiedFunction.headers.get('location'),
+            `/reports/${id}`,
+        );
+
+        // No match -> results page, not an error.
         const none = await app.request('/search?q=ffffffff', {
             headers: { cookie },
         });

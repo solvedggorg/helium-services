@@ -5,6 +5,8 @@ import type { Config } from './config.ts';
 import { logError, logEvent } from './log.ts';
 import { normalizeAppleCrashReport } from './applecrash.ts';
 import { deleteReportAndPayload } from './reports.ts';
+import { crashDiscardReason } from './report-policy.ts';
+import { indexReportResponse } from './report-search.ts';
 import { dumpPath, processedPath, writeFileWithDirs } from './paths.ts';
 import {
     computeSignature,
@@ -16,7 +18,7 @@ import {
     symbolicateMinidump,
 } from './symbolicator.ts';
 
-export interface WorkerDeps {
+interface WorkerDeps {
     db: Db;
     config: Config;
     fetchFn?: typeof fetch;
@@ -56,6 +58,16 @@ export async function processReport(
             });
             return;
         }
+        const discardReason = crashDiscardReason(resp);
+        if (discardReason) {
+            deleteReportAndPayload(db, config, report.id);
+            logEvent('report_discarded_non_actionable', {
+                report_id: report.id,
+                reason: discardReason,
+                attempts,
+            });
+            return;
+        }
         await writeFileWithDirs(
             processedPath(config.dataDir, report.id),
             JSON.stringify(resp),
@@ -79,6 +91,13 @@ export async function processReport(
             attempts,
         );
         db.recountGroups([report.group_id, groupId]);
+        try {
+            indexReportResponse(db, report.id, resp);
+        } catch (err) {
+            logError('report_search_index_error', err, {
+                report_id: report.id,
+            });
+        }
 
         logEvent('report_processed', {
             report_id: report.id,

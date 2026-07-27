@@ -1,4 +1,5 @@
 import { getConnInfo } from 'hono/deno';
+import { bearerAuth } from 'hono/bearer-auth';
 import { rateLimiter } from 'hono-rate-limiter';
 import { type Context, Hono } from 'hono';
 
@@ -93,21 +94,39 @@ export function ingestRoutes(deps: AppDeps): Hono<Env> {
         },
     );
 
-    app.post('/api/symbols', async (c) => {
-        try {
-            const result = await ingestSymbolUpload(c.req.raw, config, db, {
-                symsorterBin: deps.symsorterBin,
-            });
-            return c.json(result);
-        } catch (err) {
-            if (err instanceof HttpError) {
-                return errorJson(err);
-            }
+    const symbolAuthError = {
+        ok: false,
+        error: 'missing or invalid bearer token',
+    };
+    app.post(
+        '/api/symbols',
+        bearerAuth<Env>({
+            token: config.symbolUploadToken,
+            noAuthenticationHeader: { message: symbolAuthError },
+            invalidAuthenticationHeader: { message: symbolAuthError },
+            invalidToken: { message: symbolAuthError },
+        }),
+        async (c) => {
+            try {
+                const result = await ingestSymbolUpload(
+                    c.req.raw,
+                    config,
+                    db,
+                    {
+                        symsorterBin: deps.symsorterBin,
+                    },
+                );
+                return c.json(result);
+            } catch (err) {
+                if (err instanceof HttpError) {
+                    return errorJson(err);
+                }
 
-            logError('symbols_ingest_error', err);
-            return c.json({ ok: false, error: 'internal error' }, 500);
-        }
-    });
+                logError('symbols_ingest_error', err);
+                return c.json({ ok: false, error: 'internal error' }, 500);
+            }
+        },
+    );
 
     return app;
 }

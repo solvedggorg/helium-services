@@ -19,7 +19,7 @@ Deno.test('signature prefers app frames when a module hint matches', async () =>
         appHints: ['MyBrowser'],
     });
     assert(sig);
-    // Frame 0 is ntdll (not ours) — the title is the first app frame instead.
+    // Frame 0 is ntdll (not ours), so the title is the first app frame instead.
     assertEquals(sig.title, 'content::RenderProcessHostImpl::OnChannelError()');
 });
 

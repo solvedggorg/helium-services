@@ -4,14 +4,14 @@ import { Readable } from 'node:stream';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 
-export interface StreamedFile {
+interface StreamedFile {
     field: string;
     filename: string;
     path: string;
     size: number;
 }
 
-export interface StreamedMultipart {
+interface StreamedMultipart {
     fields: Record<string, string>;
     files: StreamedFile[];
 }

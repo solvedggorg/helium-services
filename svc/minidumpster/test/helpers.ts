@@ -21,6 +21,8 @@ export function testConfig(
         githubClientId: 'test-client-id',
         githubClientSecret: 'test-client-secret',
         githubOrg: 'test-org',
+        githubIssueRepo: null,
+        githubIssueTemplate: null,
         sessionSecret: 'test-secret-0123456789abcdef',
         symbolUploadToken: 'test-upload-token',
         maxDumpSizeBytes: 20 * 1024 * 1024,
@@ -156,5 +158,20 @@ export async function encodeMultipart(
 export function fixtureResponse(): Promise<string> {
     return Deno.readTextFile(
         new URL('./fixtures/symbolicator_completed.json', import.meta.url),
+    );
+}
+
+export function appleCrashFixture(): Promise<string> {
+    return Deno.readTextFile(
+        new URL('./fixtures/apple_report.txt', import.meta.url),
+    );
+}
+
+export function appleFixtureResponse(): Promise<string> {
+    return Deno.readTextFile(
+        new URL(
+            './fixtures/symbolicator_apple_completed.json',
+            import.meta.url,
+        ),
     );
 }

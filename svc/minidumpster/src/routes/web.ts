@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from 'hono';
+import { accepts } from 'hono/accepts';
 import { serveStatic } from 'hono/deno';
 
 import * as ui from '../ui.ts';
@@ -6,8 +7,13 @@ import { logError, logEvent } from '../log.ts';
 import { requireSession } from './auth.ts';
 import type { GroupFilter } from '../db.ts';
 import type { AppDeps, Env } from '../app.ts';
-import type { SymbolicatorResponse } from '../signature.ts';
-import { insertReportForStoredDump, reportExpiresAt } from '../reports.ts';
+import {
+    deleteGroupAndPayloads,
+    deleteReportAndPayload,
+    insertReportForStoredDump,
+    readProcessedResponse,
+    reportExpiresAt,
+} from '../reports.ts';
 import {
     dumpPath,
     processedPath,
@@ -18,6 +24,7 @@ import {
     looksLikeAppleCrashReport,
     parseAppleCrashMeta,
 } from '../applecrash.ts';
+import { githubIssueUrl } from '../github.ts';
 
 const disablePrivateResponseCaching: MiddlewareHandler<Env> = async (
     c,
@@ -27,14 +34,9 @@ const disablePrivateResponseCaching: MiddlewareHandler<Env> = async (
     c.header('cache-control', 'private, no-store');
 };
 
-async function readProcessed(
-    dataDir: string,
-    reportId: string,
-): Promise<SymbolicatorResponse | null> {
+async function readProcessed(dataDir: string, reportId: string) {
     try {
-        return JSON.parse(
-            await Deno.readTextFile(processedPath(dataDir, reportId)),
-        ) as SymbolicatorResponse;
+        return await readProcessedResponse(dataDir, reportId);
     } catch (err) {
         logError('failed_parsing_processed', err, { dataDir, reportId });
         return null;
@@ -70,11 +72,8 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     const { config, db } = deps;
     const app = new Hono<Env>();
 
-    // Registered before the session gate: login/denied pages use the shared
-    // layout, so its static assets must be public.
     app.use('/static/*', serveStatic({ root: './src' }));
-
-    app.use('*', requireSession(config));
+    app.use('*', deps.webAuth ?? requireSession(config));
     app.use('*', disablePrivateResponseCaching);
 
     app.get('/', (c) => {
@@ -104,7 +103,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             return c.html(
                 ui.messagePage(
                     'Search',
-                    'Enter at least 4 characters of a report id or guid.',
+                    'Enter at least 4 characters of a report id, guid, or function name.',
                     login,
                 ),
                 400,
@@ -244,6 +243,23 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         );
     });
 
+    app.post('/groups/:id/delete', (c) => {
+        const id = Number(c.req.param('id'));
+        const reportIds = Number.isInteger(id)
+            ? deleteGroupAndPayloads(db, config, id)
+            : null;
+        if (!reportIds) {
+            return c.html(ui.messagePage('Not found', 'No such group.'), 404);
+        }
+
+        logEvent('group_deleted_manual', {
+            group_id: id,
+            reports_deleted: reportIds.length,
+            deleted_by: c.get('session').login,
+        });
+        return c.redirect('/', 303);
+    });
+
     app.get('/reports/:id', async (c) => {
         const report = db.getReport(c.req.param('id'));
         if (!report) {
@@ -254,12 +270,46 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             ? db.getGroup(report.group_id)
             : null;
 
+        const responseType = accepts(c, {
+            header: 'Accept',
+            supports: ['text/html', 'text/plain'],
+            default: 'text/html',
+        });
+        const wantsPlain = responseType === 'text/plain';
         let stack: string | null = null;
+        let issueUrl: string | null = null;
+        let hasProcessedResponse = false;
         if (report.status === 'processed') {
             const resp = await readProcessed(config.dataDir, report.id);
             if (resp) {
+                hasProcessedResponse = true;
+                if (wantsPlain) {
+                    return c.text(
+                        ui.reportCopyText(
+                            report,
+                            group,
+                            resp,
+                        ),
+                        200,
+                        { 'content-type': 'text/plain; charset=utf-8' },
+                    );
+                }
                 stack = ui.stackHtml(resp, true);
+                if (config.githubIssueRepo && config.githubIssueTemplate) {
+                    issueUrl = githubIssueUrl(
+                        config.githubIssueRepo,
+                        config.githubIssueTemplate,
+                        report,
+                        group,
+                        resp,
+                        config.publicBaseUrl,
+                    );
+                }
             }
+        }
+
+        if (wantsPlain) {
+            return c.text('not found\n', 404);
         }
 
         return c.html(
@@ -267,6 +317,8 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                 report,
                 group,
                 stack,
+                hasProcessedResponse,
+                issueUrl,
                 reportExpiresAt(
                     report.received_at,
                     config.retentionDays,
@@ -274,6 +326,50 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                 c.get('session').login,
             ),
         );
+    });
+
+    app.post('/reports/:id/reprocess', (c) => {
+        const id = c.req.param('id');
+        const report = db.getReport(id);
+        if (!report) {
+            return c.html(ui.messagePage('Not found', 'No such report.'), 404);
+        }
+        if (!db.requeueReport(id)) {
+            return c.html(
+                ui.messagePage(
+                    'Cannot reprocess',
+                    'Only processed reports can be reprocessed.',
+                    c.get('session').login,
+                ),
+                409,
+            );
+        }
+
+        logEvent('report_requeued_manual', {
+            report_id: id,
+            requeued_by: c.get('session').login,
+        });
+        return c.redirect(`/reports/${id}`, 303);
+    });
+
+    app.post('/reports/:id/delete', (c) => {
+        const id = c.req.param('id');
+        const report = db.getReport(id);
+        if (!report) {
+            return c.html(ui.messagePage('Not found', 'No such report.'), 404);
+        }
+
+        deleteReportAndPayload(db, config, id);
+        const groupId = report.group_id;
+        const redirect = groupId != null && db.getGroup(groupId)
+            ? `/groups/${groupId}`
+            : '/';
+        logEvent('report_deleted_manual', {
+            report_id: id,
+            group_id: groupId,
+            deleted_by: c.get('session').login,
+        });
+        return c.redirect(redirect, 303);
     });
 
     app.get('/reports/:id/dump', async (c) => {

@@ -26,7 +26,6 @@ Deno.test('session payloads round-trip and reject malformed/expired values', () 
     rejects(encodeSession({ ...valid, exp: now - 1 }));
 });
 
-/** Mock of the GitHub endpoints hit during login (middleware + org gate). */
 function githubMock(membershipState: string | null): typeof fetch {
     return (
         input: URL | RequestInfo,
@@ -66,7 +65,6 @@ function githubMock(membershipState: string | null): typeof fetch {
     };
 }
 
-/** The oauth middleware uses global fetch — stub it for the duration of fn. */
 async function withGlobalFetch(
     mock: typeof fetch,
     fn: () => Promise<void>,

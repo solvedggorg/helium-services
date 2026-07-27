@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from 'hono';
+import { secureHeaders } from 'hono/secure-headers';
 
 import type { Db } from './db.ts';
 import type { Config } from './config.ts';
@@ -12,6 +13,7 @@ export interface AppDeps {
     db: Db;
     githubFetch?: typeof fetch;
     symsorterBin?: string;
+    webAuth?: MiddlewareHandler<Env>;
 }
 
 export type Env = {
@@ -23,24 +25,22 @@ export type Env = {
 };
 
 function securityHeaders(config: Config): MiddlewareHandler<Env> {
-    return async (c, next) => {
-        await next();
-        c.header(
-            'content-security-policy',
-            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-        );
-        c.header('cross-origin-opener-policy', 'same-origin');
-        c.header('cross-origin-resource-policy', 'same-origin');
-        c.header('referrer-policy', 'no-referrer');
-        c.header('x-content-type-options', 'nosniff');
-        c.header('x-frame-options', 'DENY');
-        if (config.publicBaseUrl.startsWith('https://')) {
-            c.header(
-                'strict-transport-security',
-                'max-age=63072000; includeSubDomains',
-            );
-        }
-    };
+    return secureHeaders({
+        contentSecurityPolicy: {
+            defaultSrc: ["'none'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'"],
+            connectSrc: ["'self'"],
+            formAction: ["'self'"],
+            baseUri: ["'none'"],
+            frameAncestors: ["'none'"],
+        },
+        strictTransportSecurity: config.publicBaseUrl.startsWith('https://')
+            ? 'max-age=63072000; includeSubDomains'
+            : false,
+        xFrameOptions: 'DENY',
+    });
 }
 
 export function buildApp(deps: AppDeps): Hono<Env> {

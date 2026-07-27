@@ -1,6 +1,8 @@
 {
     "tasks": {
         "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env --allow-run src/main.ts",
+        "dev:mock": "deno run --watch=src/,test/fixtures/ --allow-net --allow-read --allow-write --allow-env src/dev.ts",
+        "dev:seed": "deno run --allow-read --allow-write --allow-env src/dev-seed.ts",
         "start": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run=symsorter src/main.ts",
         "test": "deno test --allow-net --allow-read --allow-write --allow-env --allow-run"
     },

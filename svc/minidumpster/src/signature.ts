@@ -1,3 +1,5 @@
+import { basename } from '@std/path/windows';
+
 export interface SymFrame {
     status?: string;
     function?: string | null;
@@ -19,7 +21,7 @@ export interface SymStacktrace {
     frames: SymFrame[];
 }
 
-export interface SymModule {
+interface SymModule {
     debug_id?: string;
     code_file?: string | null;
     debug_file?: string | null;
@@ -42,16 +44,10 @@ export interface SymbolicatorResponse {
     modules?: SymModule[];
 }
 
-export interface SignatureResult {
+interface SignatureResult {
     signature: string;
     title: string;
     symbolicated: boolean;
-}
-
-function basename(path: string): string {
-    const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-
-    return i >= 0 ? path.slice(i + 1) : path;
 }
 
 function parseHex(s: string | undefined | null): number | null {
@@ -229,8 +225,6 @@ export function platformFromResponse(
         return null;
     }
 
-    // Apple crash reports carry the full "macOS 26.5.1 (25F80)" string —
-    // collapse to a family name so filters group properly.
     if (/^mac\s?os/i.test(raw)) {
         return 'macOS';
     }

@@ -5,6 +5,8 @@ export interface Config {
     githubClientId: string;
     githubClientSecret: string;
     githubOrg: string;
+    githubIssueRepo: string | null;
+    githubIssueTemplate: string | null;
     sessionSecret: string;
     symbolUploadToken: string;
     maxDumpSizeBytes: number;
@@ -75,6 +77,13 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
         throw new Error('config error: PUBLIC_BASE_URL must be an http(s) URL');
     }
 
+    const githubIssueRepo = env['GITHUB_ISSUE_REPO'] || null;
+    if (githubIssueRepo && !/^[^/\s]+\/[^/\s]+$/.test(githubIssueRepo)) {
+        throw new Error(
+            'config error: GITHUB_ISSUE_REPO must be in owner/repository form',
+        );
+    }
+
     const artifactPattern = env['ARTIFACT_CRAWLER_NAME_PATTERN']
         || String
             .raw`(?:^|[-_.])(symbols?|symbolicated|debug(?:-?symbols?)?|dsym|pdb)(?:$|[-_.])`;
@@ -95,6 +104,8 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
         githubClientId: env['GITHUB_CLIENT_ID']!,
         githubClientSecret: env['GITHUB_CLIENT_SECRET']!,
         githubOrg: env['GITHUB_ORG']!,
+        githubIssueRepo,
+        githubIssueTemplate: env['GITHUB_ISSUE_TEMPLATE'] || null,
         sessionSecret: secret,
         symbolUploadToken: env['SYMBOL_UPLOAD_TOKEN']!,
         maxDumpSizeBytes: intEnv(env, 'MAX_DUMP_SIZE_MB', 20) * 1024 * 1024,
@@ -124,5 +135,27 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
             7,
         ),
         artifactCrawlerNamePattern: artifactPattern,
+    };
+}
+
+export function devConfig(
+    env: Record<string, string | undefined>,
+): Config {
+    const config = loadConfig({
+        ...env,
+        DATA_DIR: env['DEV_DATA_DIR'] || './.dev-data',
+        SYMBOLICATOR_URL: 'http://127.0.0.1:1',
+        GITHUB_CLIENT_ID: 'unused-in-mock-dev',
+        GITHUB_CLIENT_SECRET: 'unused-in-mock-dev',
+        GITHUB_ORG: 'unused-in-mock-dev',
+        SESSION_SECRET: 'mock-dev-session-secret',
+        SYMBOL_UPLOAD_TOKEN: 'mock-dev-symbol-token',
+        PUBLIC_BASE_URL: 'http://localhost',
+        GITHUB_ARTIFACT_TOKEN: '',
+    });
+
+    return {
+        ...config,
+        publicBaseUrl: `http://localhost:${config.port}`,
     };
 }

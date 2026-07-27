@@ -2,7 +2,11 @@ cache_dir: /data
 bind: 0.0.0.0:3021
 caches:
     downloaded:
-        retry_misses_after: 5m
+        retry_misses_after: 0s
+        retry_misses_after_public: 1h
+    derived:
+        retry_misses_after: 0s
+        retry_misses_after_public: 1h
 sources:
     - id: local
       type: filesystem
@@ -17,7 +21,7 @@ sources:
       filters:
           filetypes: [pe, pdb]
           path_patterns:
-              - "?:/Windows/**"
+              - '?:/Windows/**'
       is_public: true
 
     # DWARF/debuginfo for common Linux distributions
@@ -28,8 +32,8 @@ sources:
       filters:
           filetypes: [elf_code, elf_debug]
           path_patterns:
-              - "/lib/**"
-              - "/usr/lib/**"
+              - '/lib/**'
+              - '/usr/lib/**'
       is_public: true
 
     # Mozilla Breakpad archive, used as a cross-platform fallback
@@ -42,9 +46,9 @@ sources:
       filters:
           filetypes: [breakpad]
           path_patterns:
-              - "?:/Windows/**"
-              - "/lib/**"
-              - "/usr/lib/**"
-              - "/System/Library/**"
-              - "/System/Volumes/Preboot/Cryptexes/OS/**"
+              - '?:/Windows/**'
+              - '/lib/**'
+              - '/usr/lib/**'
+              - '/System/Library/**'
+              - '/System/Volumes/Preboot/Cryptexes/OS/**'
       is_public: true

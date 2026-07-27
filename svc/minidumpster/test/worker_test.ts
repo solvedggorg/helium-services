@@ -122,6 +122,10 @@ Deno.test('worker follows the pending/poll protocol and groups the report', asyn
             await Deno.readTextFile(processedPath(env.dir, claimed.id)),
         );
         assertEquals(processed.status, 'completed');
+        assertEquals(
+            env.db.searchReports('RenderProcessHostImpl').map((r) => r.id),
+            [claimed.id],
+        );
     } finally {
         await env.cleanup();
     }
@@ -374,6 +378,34 @@ Deno.test('worker drops raw data rejected by Symbolicator parsing', async () => 
     }
 });
 
+Deno.test('worker drops non-actionable crashes after symbolication', async () => {
+    const response = JSON.parse(
+        await fixtureResponse(),
+    );
+    response.stacktraces[0].frames[1].function =
+        'partition_alloc::TerminateBecauseOutOfMemory(unsigned long long)';
+    const mock = mockSymbolicator(JSON.stringify(response), 0);
+    const env = await makeTestEnv();
+    try {
+        const id = crypto.randomUUID();
+        await insertPendingReport(env, id);
+        const claimed = env.db.claimNext(Date.now());
+        assert(claimed);
+
+        await processReport({
+            db: env.db,
+            config: env.config,
+            fetchFn: mock.fetchFn,
+            pollIntervalMs: 5,
+        }, claimed);
+
+        await assertPayloadDiscarded(env, id);
+        assertEquals(env.db.reportsPerDay(0), []);
+    } finally {
+        await env.cleanup();
+    }
+});
+
 Deno.test('retention deletes expired reports and all of their files', async () => {
     const env = await makeTestEnv({ retentionDays: 30 });
     const now = Date.now();
@@ -517,6 +549,8 @@ Deno.test('symbols upload requeues unsymbolicated reports, which then regroup', 
             1,
         );
         assertEquals(env.db.getReport(id)!.status, 'pending');
+        assertEquals(env.db.getReport(id)!.group_id, null);
+        assertEquals(env.db.getGroup(junkGroupId), null);
         assertEquals(
             env.db.claimNext(Date.now()),
             null,
@@ -572,10 +606,10 @@ Deno.test('symbol retention expires old bundles but keeps shared debug files', a
         const past = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
         await Deno.utime(`${symRoot}/bundles/helium-1.0.0`, past, past);
 
-        // Debug file only in the old build → should be deleted entirely.
+        // Debug file only in the old build -> should be deleted entirely.
         await mk('aa/aa1111/debuginfo');
         await mk('aa/aa1111/refs/helium-1.0.0');
-        // Debug file shared by both builds → keeps its dir, loses the old ref.
+        // Debug file shared by both builds -> keeps its dir, loses the old ref.
         await mk('bb/bb2222/debuginfo');
         await mk('bb/bb2222/refs/helium-1.0.0');
         await mk('bb/bb2222/refs/helium-2.0.0');

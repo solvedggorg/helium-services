@@ -11,7 +11,7 @@ import { streamMultipartToDisk } from './multipart.ts';
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SYMSORTER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-export interface SymbolIngestResult {
+interface SymbolIngestResult {
     ok: true;
     product: string;
     version: string;
@@ -26,17 +26,6 @@ export interface SymbolIngestAndRequeueResult extends SymbolIngestResult {
 
 export interface SymbolsOptions {
     symsorterBin?: string;
-}
-
-// Must outlast caches.downloaded.retry_misses_after in symbolicator.config.yml,
-// or requeued reports would just be served the cached misses again.
-const SYMBOLS_REQUEUE_DELAY_MS = 10 * 60 * 1000;
-
-function bearerToken(req: Request): string | null {
-    const h = req.headers.get('authorization') ?? '';
-    const m = /^Bearer\s+(.+)$/i.exec(h);
-
-    return m ? m[1].trim() : null;
 }
 
 function requireValidNames(product: string, version: string): void {
@@ -225,9 +214,6 @@ async function handleSymbolUpload(
     config: Config,
     opts: SymbolsOptions,
 ): Promise<SymbolIngestResult> {
-    if (bearerToken(req) !== config.symbolUploadToken) {
-        throw new HttpError(401, 'missing or invalid bearer token');
-    }
     const body = req.body;
     if (!body) {
         throw new HttpError(400, 'empty request body');
@@ -293,7 +279,7 @@ function requeueSymbolResult(
     const requeued = db.requeueUnsymbolicated(
         result.product,
         result.version,
-        Date.now() + SYMBOLS_REQUEUE_DELAY_MS,
+        Date.now(),
     );
     if (requeued > 0) {
         logEvent('symbols_requeue', {

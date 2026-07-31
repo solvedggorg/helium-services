@@ -137,8 +137,13 @@ function isAppFrame(f: SymFrame, hints: string[]): boolean {
 const SENTINEL_FRAME_RE = new RegExp(
     [
         '^(base::)?ImmediateCrash',
-        '^base::debug::(BreakDebugger|CollectStackTrace|StackTrace)',
+        '^base::debug::(BreakDebugger|CollectStackTrace|DumpWithoutCrashing|StackTrace)',
+        '^crash_reporter::DumpWithoutCrashing',
         '^logging::',
+        '^operator\\(\\)$',
+        '^InvokeCallback$',
+        '^~Cleanup$',
+        '^~ErrnoLogMessage$',
         'CheckFailure',
         'CheckError',
         'NotReached',
@@ -165,7 +170,7 @@ function isSentinelFrame(f: SymFrame): boolean {
 
 function skipSentinelFrames(frames: SymFrame[]): SymFrame[] {
     let i = 0;
-    while (i < frames.length && i < 8 && isSentinelFrame(frames[i])) {
+    while (i < frames.length && isSentinelFrame(frames[i])) {
         i++;
     }
 

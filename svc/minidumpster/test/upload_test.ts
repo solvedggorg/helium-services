@@ -477,6 +477,74 @@ Deno.test('groups can be deleted with all reports and payloads', async () => {
     }
 });
 
+Deno.test('all reports in a group can be manually requeued', async () => {
+    const env = await makeTestEnv();
+    try {
+        const app = buildApp({ config: env.config, db: env.db });
+        const cookie = await testSessionCookie(env);
+        const ids = [crypto.randomUUID(), crypto.randomUUID()];
+        const groupId = env.db.upsertGroup(
+            'group-reprocess',
+            'operator()',
+            Date.now(),
+        );
+        for (const [index, id] of ids.entries()) {
+            await writeFileWithDirs(dumpPath(env.dir, id), 'raw');
+            await writeFileWithDirs(
+                processedPath(env.dir, id),
+                JSON.stringify({ status: 'completed', stacktraces: [] }),
+            );
+            env.db.insertReport({
+                id,
+                product: 'Helium',
+                version: '1.0',
+                guid: null,
+                ptype: null,
+                channel: null,
+                annotations: '{}',
+                received_at: Date.now() + index,
+            });
+            env.db.markProcessed(
+                id,
+                groupId,
+                'macOS',
+                Date.now(),
+                true,
+                3,
+            );
+        }
+        env.db.recountGroups([groupId]);
+
+        const page = await app.request(`/groups/${groupId}`, {
+            headers: { cookie },
+        });
+        assert((await page.text()).includes('Reprocess group'));
+
+        const response = await app.request(`/groups/${groupId}/reprocess`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(response.status, 303);
+        assertEquals(response.headers.get('location'), '/');
+        assertEquals(env.db.getGroup(groupId), null);
+        for (const id of ids) {
+            const report = env.db.getReport(id)!;
+            assertEquals(report.status, 'pending');
+            assertEquals(report.group_id, null);
+            assertEquals(report.attempts, 0);
+            assertEquals(report.next_attempt_at, 0);
+        }
+
+        const again = await app.request(`/groups/${groupId}/reprocess`, {
+            method: 'POST',
+            headers: { cookie },
+        });
+        assertEquals(again.status, 404);
+    } finally {
+        await env.cleanup();
+    }
+});
+
 Deno.test('worker symbolicates Apple reports via /applecrashreport', async () => {
     const appleResponse = await appleFixtureResponse();
     let normalizedSeen = '';

@@ -260,6 +260,21 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
         return c.redirect('/', 303);
     });
 
+    app.post('/groups/:id/reprocess', (c) => {
+        const id = Number(c.req.param('id'));
+        const requeued = Number.isInteger(id) ? db.requeueGroup(id) : null;
+        if (requeued === null) {
+            return c.html(ui.messagePage('Not found', 'No such group.'), 404);
+        }
+
+        logEvent('group_requeued_manual', {
+            group_id: id,
+            reports_requeued: requeued,
+            requeued_by: c.get('session').login,
+        });
+        return c.redirect('/', 303);
+    });
+
     app.get('/reports/:id', async (c) => {
         const report = db.getReport(c.req.param('id'));
         if (!report) {

@@ -8,6 +8,19 @@ document.addEventListener('submit', (event) => {
 });
 
 document.addEventListener('click', (event) => {
+    if (event.target.matches('[data-stack-fold-toggle]')) {
+        const foldToggle = event.target;
+        const id = foldToggle.dataset.stackFoldToggle;
+        const expanded = foldToggle.getAttribute('aria-expanded') === 'true';
+        foldToggle.setAttribute('aria-expanded', String(!expanded));
+        document.querySelectorAll('[data-stack-fold-row]').forEach((row) => {
+            if (row.dataset.stackFoldRow === id) {
+                row.hidden = expanded;
+            }
+        });
+        return;
+    }
+
     if (event.target.matches('[data-copy-report]')) {
         const copy = event.target;
         fetch(document.location.href, {

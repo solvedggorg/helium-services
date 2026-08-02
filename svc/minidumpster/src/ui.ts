@@ -10,6 +10,7 @@ import type {
 } from './db.ts';
 import {
     crashingThread,
+    isCrashMachineryFrame,
     type SymbolicatorResponse,
     type SymFrame,
     type SymStacktrace,
@@ -208,8 +209,9 @@ export function groupsPage(data: GroupsPageData, user?: string): string {
     });
 }
 
-function frameView(f: SymFrame) {
+function frameView(f: SymFrame, index: number) {
     return {
+        index,
         fn: f.function ?? f.symbol ?? null,
         addr: f.instruction_addr ?? '?',
         loc: frameLocation(f) ?? '',
@@ -217,12 +219,52 @@ function frameView(f: SymFrame) {
     };
 }
 
-function threadView(t: SymStacktrace, crashed: boolean) {
+function frameRows(t: SymStacktrace, threadIndex: number) {
+    const frames = t.frames.map(frameView);
+    const rows: ({ kind: 'frame'; frame: ReturnType<typeof frameView> } | {
+        kind: 'fold';
+        id: string;
+        frames: ReturnType<typeof frameView>[];
+    })[] = [];
+
+    let prefixEnd = 0;
+    while (
+        prefixEnd < frames.length
+        && isCrashMachineryFrame(t.frames[prefixEnd])
+    ) {
+        prefixEnd++;
+    }
+
+    if (prefixEnd >= 2) {
+        rows.push({
+            kind: 'fold',
+            id: `stack-fold-${threadIndex}-0`,
+            frames: frames.slice(0, prefixEnd),
+        });
+    } else if (prefixEnd === 1) {
+        rows.push({ kind: 'frame', frame: frames[0] });
+    }
+
+    rows.push(
+        ...frames.slice(prefixEnd).map((frame) => ({
+            kind: 'frame' as const,
+            frame,
+        })),
+    );
+
+    return rows;
+}
+
+function threadView(
+    t: SymStacktrace,
+    crashed: boolean,
+    threadIndex: number,
+) {
     return {
         id: String(t.thread_id ?? '?'),
         name: t.thread_name ?? '',
         crashed,
-        frames: t.frames.map(frameView),
+        rows: frameRows(t, threadIndex),
     };
 }
 
@@ -347,7 +389,7 @@ export function stackHtml(
         hasTraces: traces.length > 0,
         crashReason: resp.crash_reason ?? '',
         sysInfo: systemInfo(resp),
-        threads: shown.map((t) => threadView(t, t === crashing)),
+        threads: shown.map((t, i) => threadView(t, t === crashing, i)),
     });
 }
 

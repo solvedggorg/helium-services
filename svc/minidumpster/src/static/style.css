@@ -92,6 +92,34 @@ table {
         opacity: .5;
         width: 2.5em;
     }
+
+    tr.stack-fold-summary td {
+        background: color-mix(in srgb, var(--line) 5%, transparent);
+    }
+}
+
+.stack-fold-toggle {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: .65;
+
+    &::before {
+        content: '▸';
+        display: inline-block;
+        width: 1.2em;
+    }
+
+    &[aria-expanded='true']::before {
+        content: '▾';
+    }
+
+    &:hover,
+    &:focus-visible {
+        opacity: 1;
+    }
 }
 
 form.filters {

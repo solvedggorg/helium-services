@@ -143,8 +143,8 @@ const SENTINEL_FRAME_RE = new RegExp(
         '^crash_reporter::DumpWithoutCrashing',
         '^logging::',
         '^operator\\(\\)$',
-        '^InvokeCallback$',
-        '^~Cleanup$',
+        '^(?:absl::cleanup_internal::Storage<.*>::)?InvokeCallback(?:\\(|$)',
+        '^(?:absl::Cleanup<.*>::)?~Cleanup(?:\\(|$)',
         '^~ErrnoLogMessage$',
         'CheckFailure',
         'CheckError',
@@ -164,7 +164,7 @@ const SENTINEL_FRAME_RE = new RegExp(
     ].join('|'),
 );
 
-function isSentinelFrame(f: SymFrame): boolean {
+export function isCrashMachineryFrame(f: SymFrame): boolean {
     const fn = frameFunction(f);
 
     return fn !== null && SENTINEL_FRAME_RE.test(fn);
@@ -172,7 +172,7 @@ function isSentinelFrame(f: SymFrame): boolean {
 
 function skipSentinelFrames(frames: SymFrame[]): SymFrame[] {
     let i = 0;
-    while (i < frames.length && isSentinelFrame(frames[i])) {
+    while (i < frames.length && isCrashMachineryFrame(frames[i])) {
         i++;
     }
 

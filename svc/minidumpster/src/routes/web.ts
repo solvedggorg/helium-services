@@ -318,7 +318,6 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                         report,
                         group,
                         resp,
-                        config.publicBaseUrl,
                     );
                 }
             }

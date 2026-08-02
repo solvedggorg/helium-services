@@ -58,7 +58,6 @@ Deno.test('GitHub issue URL prefills the Helium bug report safely', () => {
             report,
             group,
             response,
-            'https://crashes.example.test',
         ),
     );
 

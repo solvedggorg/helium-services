@@ -210,6 +210,11 @@ const ANCHORED_SIGNATURE_RULES: AnchoredSignatureRule[] = [
         triggerDepth: 8,
         anchor: /HandleCheckErrorLogMessage(?:\(|$)/,
     },
+    {
+        trigger: /^absl::ThrowStd[A-Za-z]+(?:\(|$)/,
+        triggerDepth: 16,
+        anchor: /^absl::ThrowStd[A-Za-z]+(?:\(|$)/,
+    },
 ];
 
 function applyAnchoredSignatureRule(frames: SymFrame[]): SymFrame[] {

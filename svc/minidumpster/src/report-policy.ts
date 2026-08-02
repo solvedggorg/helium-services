@@ -8,6 +8,24 @@ const DISCARD_RULES = [
         ],
     },
     {
+        reason: 'no usable Linux sandbox',
+        functions: [
+            'ZygoteHostImpl::Init',
+        ],
+    },
+    {
+        reason: 'GPU hang recovery',
+        functions: [
+            'DeliberatelyTerminateToRecoverFromHang',
+        ],
+    },
+    {
+        reason: 'Windows hung-input diagnostic dump',
+        functions: [
+            'DumpProcessForHungInputThread',
+        ],
+    },
+    {
         reason: 'out of memory',
         functions: [
             'TerminateBecauseOutOfMemory',

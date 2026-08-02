@@ -33,6 +33,15 @@ Deno.test('database migration removes the legacy dump_deleted column', async () 
                     symbolicated INTEGER NOT NULL DEFAULT 1
                 );
                 CREATE INDEX idx_reports_status ON reports(status);
+                CREATE VIRTUAL TABLE report_search USING fts5(
+                    report_id UNINDEXED,
+                    functions
+                );
+                CREATE TRIGGER reports_search_delete
+                AFTER DELETE ON reports
+                BEGIN
+                  DELETE FROM report_search WHERE report_id = old.id;
+                END;
                 INSERT INTO reports (id, status, received_at, dump_deleted)
                 VALUES ('legacy-report', 'processed', 1234, 1);
             `);
@@ -55,6 +64,18 @@ Deno.test('database migration removes the legacy dump_deleted column', async () 
                 WHERE name = 'dump_deleted'
             `).get();
             assertEquals(legacyColumn, undefined);
+            const trigger = migrated.prepare(`
+                SELECT sql
+                FROM sqlite_master
+                WHERE type = 'trigger' AND name = 'reports_search_delete'
+            `).get() as { sql: string };
+            assertEquals(/rowid\s*=\s*old\.rowid/i.test(trigger.sql), true);
+            assertEquals(
+                (migrated.prepare('PRAGMA user_version').get() as {
+                    user_version: number;
+                }).user_version,
+                2,
+            );
         } finally {
             migrated.close();
         }

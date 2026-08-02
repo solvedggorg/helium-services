@@ -75,6 +75,8 @@ export interface ArtifactIngestRow {
 
 type SqlParam = string | number | bigint | null | Uint8Array;
 
+const SCHEMA_VERSION = 2;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY,
@@ -103,11 +105,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS report_search USING fts5(
   report_id UNINDEXED,
   functions
 );
-CREATE TRIGGER IF NOT EXISTS reports_search_delete
-AFTER DELETE ON reports
-BEGIN
-  DELETE FROM report_search WHERE report_id = old.id;
-END;
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   signature TEXT UNIQUE NOT NULL,
@@ -131,21 +128,53 @@ CREATE TABLE IF NOT EXISTS artifact_ingests (
 `;
 
 function migrateSchema(db: DatabaseSync): void {
-    // Replaced by idx_reports_queue in databases created before it.
-    db.exec('DROP INDEX IF EXISTS idx_reports_status');
-
-    const legacyColumn = db.prepare(`
-        SELECT 1
-        FROM pragma_table_info('reports')
-        WHERE name = 'dump_deleted'
-        LIMIT 1
-    `).get();
-
-    if (!legacyColumn) {
+    const current = Number(
+        (db.prepare('PRAGMA user_version').get() as { user_version: number })
+            .user_version,
+    );
+    if (current > SCHEMA_VERSION) {
+        throw new Error(
+            `database schema version ${current} is newer than supported version ${SCHEMA_VERSION}`,
+        );
+    }
+    if (current === SCHEMA_VERSION) {
         return;
     }
 
-    db.exec('ALTER TABLE reports DROP COLUMN dump_deleted');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+        if (current < 1) {
+            // Replaced by idx_reports_queue in databases created before it.
+            db.exec('DROP INDEX IF EXISTS idx_reports_status');
+
+            const legacyColumn = db.prepare(`
+                SELECT 1
+                FROM pragma_table_info('reports')
+                WHERE name = 'dump_deleted'
+                LIMIT 1
+            `).get();
+            if (legacyColumn) {
+                db.exec('ALTER TABLE reports DROP COLUMN dump_deleted');
+            }
+            db.exec('PRAGMA user_version = 1');
+        }
+
+        if (current < 2) {
+            db.exec(`
+                DROP TRIGGER IF EXISTS reports_search_delete;
+                CREATE TRIGGER reports_search_delete
+                AFTER DELETE ON reports
+                BEGIN
+                  DELETE FROM report_search WHERE rowid = old.rowid;
+                END;
+            `);
+            db.exec('PRAGMA user_version = 2');
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+    }
 }
 
 export class Db {
@@ -269,29 +298,62 @@ export class Db {
 
     indexReportFunctions(reportId: string, functions: string): void {
         this.inWriteTransaction(() => {
+            const report = this.one<{ rowId: number }>(
+                `SELECT rowid AS rowId FROM reports WHERE id = ?`,
+                reportId,
+            );
+            if (!report) {
+                throw new Error(`cannot index missing report ${reportId}`);
+            }
             this.db.prepare(
                 `DELETE FROM report_search
-                 WHERE report_id = ?`,
-            ).run(reportId);
+                 WHERE rowid = ?`,
+            ).run(report.rowId);
             this.db.prepare(
-                `INSERT INTO report_search (report_id, functions)
-                 VALUES (?, ?)`,
-            ).run(reportId, functions);
+                `INSERT INTO report_search (rowid, report_id, functions)
+                 VALUES (?, ?, ?)`,
+            ).run(report.rowId, reportId, functions);
         });
     }
 
-    reportsMissingSearchIndex(): string[] {
-        return this.many<{ id: string }>(
-            `SELECT reports.id
+    prepareReportSearchBackfill(): void {
+        const legacyRow = this.one<{ present: number }>(
+            `SELECT 1 AS present
+             FROM report_search
+             LEFT JOIN reports ON reports.id = report_search.report_id
+             WHERE reports.id IS NULL
+                OR reports.rowid != report_search.rowid
+             LIMIT 1`,
+        );
+        if (legacyRow) {
+            this.db.exec('DELETE FROM report_search');
+        }
+    }
+
+    reportSearchIndexCandidates(
+        afterRowId = 0,
+        limit = 100,
+    ): Array<{ rowId: number; id: string; needsIndex: number }> {
+        return this.many<{
+            rowId: number;
+            id: string;
+            needsIndex: number;
+        }>(
+            `SELECT reports.rowid AS rowId,
+                    reports.id,
+                    reports.status = 'processed' AND NOT EXISTS (
+                        SELECT 1
+                        FROM report_search
+                        WHERE report_search.rowid = reports.rowid
+                          AND report_search.report_id = reports.id
+                    ) AS needsIndex
              FROM reports
-             WHERE reports.status = 'processed'
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM report_search
-                   WHERE report_search.report_id = reports.id
-               )
-             ORDER BY reports.received_at`,
-        ).map((report) => report.id);
+             WHERE reports.rowid > ?
+             ORDER BY reports.rowid
+             LIMIT ?`,
+            afterRowId,
+            limit,
+        );
     }
 
     claimNext(now: number): ReportRow | null {

@@ -32,19 +32,35 @@ export async function backfillReportSearch(
     db: Db,
     dataDir: string,
 ) {
+    db.prepareReportSearchBackfill();
     let indexed = 0;
     let failed = 0;
+    let cursor = 0;
 
-    for (const reportId of db.reportsMissingSearchIndex()) {
-        try {
-            const response = await readProcessedResponse(dataDir, reportId);
-            indexReportResponse(db, reportId, response);
-            indexed++;
-        } catch (err) {
-            failed++;
-            logError('report_search_backfill_error', err, {
-                report_id: reportId,
-            });
+    while (true) {
+        const reports = db.reportSearchIndexCandidates(cursor);
+        if (reports.length === 0) {
+            break;
+        }
+
+        for (const report of reports) {
+            cursor = report.rowId;
+            if (!report.needsIndex) {
+                continue;
+            }
+            try {
+                const response = await readProcessedResponse(
+                    dataDir,
+                    report.id,
+                );
+                indexReportResponse(db, report.id, response);
+                indexed++;
+            } catch (err) {
+                failed++;
+                logError('report_search_backfill_error', err, {
+                    report_id: report.id,
+                });
+            }
         }
     }
 

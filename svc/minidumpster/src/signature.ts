@@ -87,11 +87,13 @@ function moduleFor(
     }) ?? null;
 }
 
+function frameFunction(f: SymFrame): string | null {
+    return (f.function ?? f.symbol)?.trim() || null;
+}
+
 function frameLabel(f: SymFrame, modules?: SymModule[]): string {
-    const fn = f.function ?? f.symbol;
-    if (fn && fn.trim() !== '') {
-        return fn.trim().replace(/\s+/g, ' ');
-    }
+    const fn = frameFunction(f);
+    if (fn !== null) return fn.replace(/\s+/g, ' ');
 
     const mod = f.package ? basename(f.package) : 'unknown';
     const m = moduleFor(f, modules);
@@ -137,8 +139,13 @@ function isAppFrame(f: SymFrame, hints: string[]): boolean {
 const SENTINEL_FRAME_RE = new RegExp(
     [
         '^(base::)?ImmediateCrash',
-        '^base::debug::(BreakDebugger|CollectStackTrace|StackTrace)',
+        '^base::debug::(BreakDebugger|CollectStackTrace|DumpWithoutCrashing|StackTrace)',
+        '^crash_reporter::DumpWithoutCrashing',
         '^logging::',
+        '^operator\\(\\)$',
+        '^InvokeCallback$',
+        '^~Cleanup$',
+        '^~ErrnoLogMessage$',
         'CheckFailure',
         'CheckError',
         'NotReached',
@@ -158,18 +165,76 @@ const SENTINEL_FRAME_RE = new RegExp(
 );
 
 function isSentinelFrame(f: SymFrame): boolean {
-    const fn = f.function ?? f.symbol;
+    const fn = frameFunction(f);
 
-    return typeof fn === 'string' && SENTINEL_FRAME_RE.test(fn.trim());
+    return fn !== null && SENTINEL_FRAME_RE.test(fn);
 }
 
 function skipSentinelFrames(frames: SymFrame[]): SymFrame[] {
     let i = 0;
-    while (i < frames.length && i < 8 && isSentinelFrame(frames[i])) {
+    while (i < frames.length && isSentinelFrame(frames[i])) {
         i++;
     }
 
     return i > 0 && i < frames.length ? frames.slice(i) : frames;
+}
+
+interface AnchoredSignatureRule {
+    trigger: RegExp;
+    triggerDepth: number;
+    anchor: RegExp;
+}
+
+// Some diagnostic reports are captured by a shared handler long after the
+// code which requested the report. Resume at the caller of a narrow,
+// well-known anchor instead of grouping by the shared handler.
+const ANCHORED_SIGNATURE_RULES: AnchoredSignatureRule[] = [
+    {
+        trigger: /::HandleBadMessage(?:\(|$)/,
+        triggerDepth: 8,
+        anchor: /^mojo::ReportBadMessage(?:\(|$)/,
+    },
+    {
+        trigger: /^content::bad_message::ReceivedBadMessage(?:\(|$)/,
+        triggerDepth: 4,
+        anchor: /^content::bad_message::ReceivedBadMessage(?:\(|$)/,
+    },
+    {
+        trigger:
+            /^base::PersistentMemoryAllocator::DumpWithoutCrashing(?:\(|$)/,
+        triggerDepth: 4,
+        anchor: /^base::PersistentMemoryAllocator::DumpWithoutCrashing(?:\(|$)/,
+    },
+    {
+        trigger: /HandleCheckErrorLogMessage(?:\(|$)/,
+        triggerDepth: 8,
+        anchor: /HandleCheckErrorLogMessage(?:\(|$)/,
+    },
+];
+
+function applyAnchoredSignatureRule(frames: SymFrame[]): SymFrame[] {
+    for (const rule of ANCHORED_SIGNATURE_RULES) {
+        const triggered = frames.slice(0, rule.triggerDepth).some((frame) => {
+            const fn = frameFunction(frame);
+            return fn !== null && rule.trigger.test(fn);
+        });
+        if (!triggered) {
+            continue;
+        }
+
+        let anchorIndex = -1;
+        for (let i = 0; i < frames.length; i++) {
+            const fn = frameFunction(frames[i]);
+            if (fn !== null && rule.anchor.test(fn)) {
+                anchorIndex = i;
+            }
+        }
+        if (anchorIndex >= 0 && anchorIndex + 1 < frames.length) {
+            return frames.slice(anchorIndex + 1);
+        }
+    }
+
+    return frames;
 }
 
 async function sha256Hex(text: string): Promise<string> {
@@ -197,8 +262,11 @@ export async function computeSignature(
     const appFrames = hints.length > 0
         ? thread.frames.filter((f) => isAppFrame(f, hints))
         : [];
-    const chosen = skipSentinelFrames(
+    const withoutSentinels = skipSentinelFrames(
         appFrames.length > 0 ? appFrames : thread.frames,
+    );
+    const chosen = skipSentinelFrames(
+        applyAnchoredSignatureRule(withoutSentinels),
     ).slice(0, topN);
 
     const labels = chosen.map((f) => frameLabel(f, resp.modules));

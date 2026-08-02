@@ -165,6 +165,157 @@ Deno.test('different machinery depth reaching the same frame groups together', a
     assertEquals(viaCheck.title, 'content::HandleDebugURL(GURL const&)');
 });
 
+Deno.test('bad-message dumps group by the caller that reported them', async () => {
+    const helium = '/opt/helium/helium';
+    const stack = (origin: string) =>
+        sentinelStack([
+            ['crash_reporter::DumpWithoutCrashing() [clone .cfi]', helium],
+            [
+                'base::debug::DumpWithoutCrashing(base::Location const&, base::TimeDelta)',
+                helium,
+            ],
+            [
+                'network::(anonymous namespace)::HandleBadMessage(std::string const&)',
+                helium,
+            ],
+            ['base::RepeatingCallback<void ()>::Run() const &', helium],
+            ['mojo::(anonymous namespace)::HandleError()', helium],
+            ['mojo::Invitation::InvokeDefaultProcessErrorHandler()', helium],
+            ['mojo::ReportBadTransportActivity()', helium],
+            ['ipcz::ParcelWrapper::Reject()', helium],
+            ['MojoNotifyBadMessageIpcz', helium],
+            ['mojo::DoNotifyBadMessage()', helium],
+            ['base::internal::Invoker<...>::RunOnce()', helium],
+            ['mojo::ReportBadMessage(std::string_view)', helium],
+            [origin, helium],
+            ['network::mojom::URLLoaderFactoryStubDispatch::Accept()', helium],
+        ]);
+    const cors = await computeSignature(
+        stack('network::cors::CorsURLLoaderFactory::CreateLoaderAndStart()'),
+        { topN: 5, appHints: ['helium'] },
+    );
+    const cookies = await computeSignature(
+        stack('network::CookieManager::SetCanonicalCookie()'),
+        { topN: 5, appHints: ['helium'] },
+    );
+    const corsAgain = await computeSignature(
+        stack('network::cors::CorsURLLoaderFactory::CreateLoaderAndStart()'),
+        { topN: 5, appHints: ['helium'] },
+    );
+
+    assert(cors && cookies && corsAgain);
+    assertEquals(
+        cors.title,
+        'network::cors::CorsURLLoaderFactory::CreateLoaderAndStart()',
+    );
+    assertNotEquals(cors.signature, cookies.signature);
+    assertEquals(cors.signature, corsAgain.signature);
+});
+
+Deno.test('shared diagnostic collectors group by their callers', async () => {
+    const helium = '/opt/helium/helium';
+    const contentBadMessage = await computeSignature(
+        sentinelStack([
+            ['base::debug::DumpWithoutCrashing()', helium],
+            [
+                'content::bad_message::ReceivedBadMessage(int, BadMessageReason)',
+                helium,
+            ],
+            ['content::RenderFrameHostImpl::DidCommitNavigation()', helium],
+            ['content::mojom::FrameHostStubDispatch::Accept()', helium],
+        ]),
+        { topN: 5, appHints: ['helium'] },
+    );
+    const persistentAllocator = await computeSignature(
+        sentinelStack([
+            ['base::debug::DumpWithoutCrashing()', helium],
+            [
+                'base::PersistentMemoryAllocator::DumpWithoutCrashing(unsigned int) const',
+                helium,
+            ],
+            [
+                'base::PersistentMemoryAllocator::AllocateImpl(unsigned long)',
+                helium,
+            ],
+            [
+                'base::PersistentMemoryAllocator::Allocate(unsigned long)',
+                helium,
+            ],
+        ]),
+        { topN: 5, appHints: ['helium'] },
+    );
+    const nonfatalCheck = await computeSignature(
+        sentinelStack([
+            ['base::debug::DumpWithoutCrashing()', helium],
+            ['DumpWithoutCrashing', helium],
+            ['HandleCheckErrorLogMessage', helium],
+            ['logging::NotReachedLogMessage::~NotReachedLogMessage()', helium],
+            ['content::NavigationRequest::CheckForIsolationOptIn()', helium],
+            ['content::NavigationRequest::BeginNavigation()', helium],
+        ]),
+        { topN: 5, appHints: ['helium'] },
+    );
+
+    assert(contentBadMessage && persistentAllocator && nonfatalCheck);
+    assertEquals(
+        contentBadMessage.title,
+        'content::RenderFrameHostImpl::DidCommitNavigation()',
+    );
+    assertEquals(
+        persistentAllocator.title,
+        'base::PersistentMemoryAllocator::AllocateImpl(unsigned long)',
+    );
+    assertEquals(
+        nonfatalCheck.title,
+        'content::NavigationRequest::CheckForIsolationOptIn()',
+    );
+});
+
+Deno.test('generic logging lambdas do not group unrelated fatal crashes', async () => {
+    const helium = '/Applications/Helium.app/Helium Framework';
+    const loggingPrefix: [string, string][] = [
+        ['ImmediateCrash', helium],
+        ['logging::LogMessage::HandleFatal() const', helium],
+        ['operator()', helium],
+        ['InvokeCallback', helium],
+        ['~Cleanup', helium],
+        ['~Cleanup', helium],
+        ['logging::LogMessage::Flush()', helium],
+    ];
+    const dangling = await computeSignature(
+        sentinelStack([
+            ...loggingPrefix,
+            ['logging::LogMessageFatal::~LogMessageFatal()', helium],
+            ['logging::LogMessageFatal::~LogMessageFatal()', helium],
+            [
+                'base::allocator::UnretainedDanglingRawPtrDetectedCrash(unsigned long)',
+                helium,
+            ],
+            ['ReportIfDangling<content::WebContents>', helium],
+        ]),
+        { topN: 5, appHints: ['helium'] },
+    );
+    const closeFailure = await computeSignature(
+        sentinelStack([
+            ...loggingPrefix,
+            ['logging::LogMessage::~LogMessage()', helium],
+            ['~ErrnoLogMessage', helium],
+            ['logging::CheckNoreturnError::~CheckNoreturnError()', helium],
+            ['Free', helium],
+            ['base::File::Close()', helium],
+        ]),
+        { topN: 5, appHints: ['helium'] },
+    );
+
+    assert(dangling && closeFailure);
+    assertEquals(
+        dangling.title,
+        'base::allocator::UnretainedDanglingRawPtrDetectedCrash(unsigned long)',
+    );
+    assertEquals(closeFailure.title, 'Free');
+    assertNotEquals(dangling.signature, closeFailure.signature);
+});
+
 Deno.test('an all-sentinel stack keeps its frames instead of vanishing', async () => {
     const helium = '/Applications/Helium.app/Helium Framework';
     const sig = await computeSignature(

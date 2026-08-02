@@ -415,6 +415,25 @@ export class Db {
         });
     }
 
+    requeueGroup(id: number): number | null {
+        return this.inWriteTransaction(() => {
+            if (!this.getGroup(id)) {
+                return null;
+            }
+
+            const result = this.db.prepare(
+                `UPDATE reports
+                 SET status = 'pending', group_id = NULL, error = NULL,
+                     attempts = 0, next_attempt_at = 0
+                 WHERE group_id = ?
+                   AND status = 'processed'`,
+            ).run(id);
+            this.recountGroups([id]);
+
+            return Number(result.changes);
+        });
+    }
+
     registerArtifact(
         repo: string,
         artifactId: number,

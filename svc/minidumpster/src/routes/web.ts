@@ -111,12 +111,16 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             );
         }
 
-        const results = db.searchReports(q);
-        if (results.length === 1) {
-            return c.redirect(`/reports/${results[0].id}`);
+        const reports = db.searchReports(q);
+        const groups = db.searchGroups(q);
+        if (reports.length === 1) {
+            return c.redirect(`/reports/${reports[0].id}`);
+        }
+        if (groups.length === 1) {
+            return c.redirect(`/groups/${groups[0].id}`);
         }
 
-        return c.html(ui.searchPage(q, results, login));
+        return c.html(ui.searchPage(q, { groups, reports }, login));
     });
 
     app.get('/upload', (c) => c.html(ui.uploadPage(c.get('session').login)));

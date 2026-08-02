@@ -509,10 +509,10 @@ export function symbolsPage(data: SymbolsPageData, user?: string): string {
 
 export function searchPage(
     query: string,
-    results: ReportRow[],
+    results: { groups: GroupRow[]; reports: ReportRow[] },
     user?: string,
 ): string {
-    return render('search', { title: 'Search', user, query, results });
+    return render('search', { title: 'Search', user, query, ...results });
 }
 
 export function messagePage(

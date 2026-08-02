@@ -666,7 +666,10 @@ Deno.test('search finds reports by id, guid, and function name', async () => {
         env.db.markProcessed(id, groupId, 'Windows', Date.now(), true, 1);
         env.db.indexReportFunctions(
             id,
-            'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+            [
+                'content::RenderWidgetHostImpl::OnKeyboardEvent()',
+                'content::LowerStackFunction::Run()',
+            ].join('\n'),
         );
 
         const byFunction = await app.request(
@@ -690,12 +693,56 @@ Deno.test('search finds reports by id, guid, and function name', async () => {
             `/reports/${id}`,
         );
 
+        // A function below the signature frame still finds the group through
+        // the indexed stacks of its reports.
+        const byLowerFrame = await app.request(
+            `/search?${new URLSearchParams({ q: 'LowerStackFunction' })}`,
+            { headers: { cookie } },
+        );
+        assertEquals(byLowerFrame.status, 302);
+        assertEquals(byLowerFrame.headers.get('location'), `/reports/${id}`);
+
+        const uniqueGroupId = env.db.upsertGroup(
+            'unique-group-signature',
+            'content::UniqueGroupSearchResult()',
+            Date.now(),
+        );
+        const uniqueGroup = await app.request(
+            '/search?q=UniqueGroupSearchResult',
+            { headers: { cookie } },
+        );
+        assertEquals(uniqueGroup.status, 302);
+        assertEquals(
+            uniqueGroup.headers.get('location'),
+            `/groups/${uniqueGroupId}`,
+        );
+
+        const firstSharedGroupId = env.db.upsertGroup(
+            'shared-group-signature-1',
+            'content::SharedGroupSearchResultOne()',
+            Date.now(),
+        );
+        const secondSharedGroupId = env.db.upsertGroup(
+            'shared-group-signature-2',
+            'content::SharedGroupSearchResultTwo()',
+            Date.now(),
+        );
+        const sharedGroups = await app.request(
+            '/search?q=SharedGroupSearchResult',
+            { headers: { cookie } },
+        );
+        assertEquals(sharedGroups.status, 200);
+        const sharedGroupResults = await sharedGroups.text();
+        assert(sharedGroupResults.includes('Groups'));
+        assert(sharedGroupResults.includes(`/groups/${firstSharedGroupId}`));
+        assert(sharedGroupResults.includes(`/groups/${secondSharedGroupId}`));
+
         // No match -> results page, not an error.
         const none = await app.request('/search?q=ffffffff', {
             headers: { cookie },
         });
         assertEquals(none.status, 200);
-        assert((await none.text()).includes('No reports match'));
+        assert((await none.text()).includes('No groups or reports match'));
 
         // Too-short queries are rejected.
         const short = await app.request('/search?q=ab', {

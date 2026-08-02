@@ -75,6 +75,11 @@ export interface ArtifactIngestRow {
 
 type SqlParam = string | number | bigint | null | Uint8Array;
 
+function functionSearchQuery(query: string): string | null {
+    const terms = query.match(/\w+/g);
+    return terms?.map((term) => `"${term}"*`).join(' AND ') || null;
+}
+
 const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
@@ -272,12 +277,11 @@ export class Db {
             limit,
         );
 
-        const terms = q.match(/[\p{L}\p{N}_]+/gu);
-        if (!terms || direct.length >= limit) {
+        const ftsQuery = functionSearchQuery(q);
+        if (!ftsQuery || direct.length >= limit) {
             return direct;
         }
 
-        const ftsQuery = terms.map((term) => `"${term}"*`).join(' AND ');
         const fullText = this.many<ReportRow>(
             `SELECT reports.*
              FROM report_search
@@ -294,6 +298,36 @@ export class Db {
         return direct.concat(
             fullText.filter((report) => !seen.has(report.id)),
         ).slice(0, limit);
+    }
+
+    searchGroups(query: string, limit = 25): GroupRow[] {
+        const q = query.trim().toLowerCase();
+        const ftsQuery = functionSearchQuery(q);
+        if (!ftsQuery) {
+            return [];
+        }
+
+        return this.many<GroupRow>(
+            `SELECT *
+             FROM groups
+             WHERE instr(lower(title), ?) > 0
+                OR lower(signature) LIKE ?
+                OR id IN (
+                    SELECT reports.group_id
+                    FROM report_search
+                    JOIN reports
+                      ON reports.id = report_search.report_id
+                    WHERE report_search MATCH ?
+                      AND reports.status = 'processed'
+                      AND reports.group_id IS NOT NULL
+                )
+             ORDER BY report_count DESC, last_seen DESC
+             LIMIT ?`,
+            q,
+            `${q}%`,
+            ftsQuery,
+            limit,
+        );
     }
 
     indexReportFunctions(reportId: string, functions: string): void {

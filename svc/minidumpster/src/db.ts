@@ -346,46 +346,6 @@ export class Db {
         });
     }
 
-    prepareReportSearchBackfill(): void {
-        const legacyRow = this.one<{ present: number }>(
-            `SELECT 1 AS present
-             FROM report_search
-             LEFT JOIN reports ON reports.id = report_search.report_id
-             WHERE reports.id IS NULL
-                OR reports.rowid != report_search.rowid
-             LIMIT 1`,
-        );
-        if (legacyRow) {
-            this.db.exec('DELETE FROM report_search');
-        }
-    }
-
-    reportSearchIndexCandidates(
-        afterRowId = 0,
-        limit = 100,
-    ): Array<{ rowId: number; id: string; needsIndex: number }> {
-        return this.many<{
-            rowId: number;
-            id: string;
-            needsIndex: number;
-        }>(
-            `SELECT reports.rowid AS rowId,
-                    reports.id,
-                    reports.status = 'processed' AND NOT EXISTS (
-                        SELECT 1
-                        FROM report_search
-                        WHERE report_search.rowid = reports.rowid
-                          AND report_search.report_id = reports.id
-                    ) AS needsIndex
-             FROM reports
-             WHERE reports.rowid > ?
-             ORDER BY reports.rowid
-             LIMIT ?`,
-            afterRowId,
-            limit,
-        );
-    }
-
     claimNext(now: number): ReportRow | null {
         return this.one<ReportRow>(
             `UPDATE reports

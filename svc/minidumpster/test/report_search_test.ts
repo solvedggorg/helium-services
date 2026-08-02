@@ -1,11 +1,10 @@
 import { assertEquals } from '@std/assert';
 
-import { processedPath, writeFileWithDirs } from '../src/paths.ts';
-import { backfillReportSearch } from '../src/report-search.ts';
+import { indexReportResponse } from '../src/report-search.ts';
 import type { SymbolicatorResponse } from '../src/signature.ts';
 import { makeTestEnv } from './helpers.ts';
 
-Deno.test('report search backfills existing processed responses', async () => {
+Deno.test('report search indexes symbolicated function names', async () => {
     const env = await makeTestEnv();
     try {
         const id = crypto.randomUUID();
@@ -34,16 +33,9 @@ Deno.test('report search backfills existing processed responses', async () => {
             Date.now(),
         );
         env.db.markProcessed(id, groupId, 'Windows', Date.now(), true, 1);
-        await writeFileWithDirs(
-            processedPath(env.dir, id),
-            JSON.stringify(response),
-        );
 
         assertEquals(env.db.searchReports('LocalFrame'), []);
-        assertEquals(
-            await backfillReportSearch(env.db, env.dir),
-            { indexed: 1, failed: 0 },
-        );
+        indexReportResponse(env.db, id, response);
         assertEquals(
             env.db.searchReports('LocalFrame').map((report) => report.id),
             [id],
@@ -54,10 +46,7 @@ Deno.test('report search backfills existing processed responses', async () => {
             ),
             [id],
         );
-        assertEquals(
-            await backfillReportSearch(env.db, env.dir),
-            { indexed: 0, failed: 0 },
-        );
+        indexReportResponse(env.db, id, response);
 
         env.db.deleteReport(id);
         assertEquals(env.db.searchReports('LocalFrame'), []);

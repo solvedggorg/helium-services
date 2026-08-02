@@ -7,7 +7,7 @@ import {
     processedPath,
     writeFileWithDirs,
 } from './paths.ts';
-import { backfillReportSearch } from './report-search.ts';
+import { indexReportResponse } from './report-search.ts';
 import type { SymbolicatorResponse } from './signature.ts';
 
 const HOUR = 60 * 60 * 1000;
@@ -215,6 +215,7 @@ export async function seedDevData(
     for (const report of REPORTS) {
         const receivedAt = now - report.ageMs;
         const group = GROUPS[report.group];
+        const response = responseFor(report, windows, apple);
         const groupId = db.upsertGroup(
             group.signature,
             group.title,
@@ -223,6 +224,7 @@ export async function seedDevData(
         groupIds.set(report.group, groupId);
 
         if (db.getReport(report.id)) {
+            indexReportResponse(db, report.id, response);
             continue;
         }
 
@@ -253,8 +255,9 @@ export async function seedDevData(
         );
         await writeFileWithDirs(
             processedPath(config.dataDir, report.id),
-            JSON.stringify(responseFor(report, windows, apple), null, 2),
+            JSON.stringify(response, null, 2),
         );
+        indexReportResponse(db, report.id, response);
         db.markProcessed(
             report.id,
             groupId,
@@ -317,8 +320,6 @@ export async function seedDevData(
         now + HOUR,
         false,
     );
-    await backfillReportSearch(db, config.dataDir);
-
     return { reportsCreated, reportsTotal: REPORTS.length + 1 };
 }
 

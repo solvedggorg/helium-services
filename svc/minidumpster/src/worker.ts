@@ -73,7 +73,8 @@ export async function processReport(
             JSON.stringify(resp),
         );
 
-        const hints = report.product ? [report.product] : [];
+        const productHint = report.product?.replace(/_Mac$/i, '');
+        const hints = ['chrome', ...(productHint ? [productHint] : [])];
         const sig = (await computeSignature(resp, {
             topN: config.signatureFrames,
             appHints: hints,

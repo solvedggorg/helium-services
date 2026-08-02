@@ -158,6 +158,7 @@ const SENTINEL_FRAME_RE = new RegExp(
         '^partition_alloc::internal::PartitionExcessiveAllocationSize',
         '^partition_alloc::TerminateBecauseOutOfMemory',
         '^base::internal::OnNoMemory',
+        '^base::allocator::UnretainedDanglingRawPtrDetectedCrash',
         '^__fastfail',
         '^RtlFailFast',
         'CrashForException',
@@ -170,9 +171,29 @@ export function isCrashMachineryFrame(f: SymFrame): boolean {
     return fn !== null && SENTINEL_FRAME_RE.test(fn);
 }
 
-function skipSentinelFrames(frames: SymFrame[]): SymFrame[] {
+const SIGNATURE_ONLY_FRAME_RE = new RegExp(
+    [
+        '^base::internal::RawPtrBackupRefImpl<.*>::ReportIfDangling\\(',
+        '^base::raw_ptr<.*>::ReportIfDangling\\(',
+        '^base::internal::UnretainedWrapper<.*>::(?:GetInternal|get)\\(',
+        '^base::BindUnwrapTraits<.*>::Unwrap\\(',
+        '^base::internal::Unwrap(?:<.*>)?\\(',
+        '^base::internal::InvokeHelper<.*>::MakeItSo\\(',
+        '^base::internal::Invoker<.*>::Run(?:Impl|Once)?\\(',
+        '^base::OnceCallback<.*>::Run\\(',
+    ].join('|'),
+);
+
+export function isSignatureExcludedFrame(f: SymFrame): boolean {
+    const fn = frameFunction(f);
+
+    return isCrashMachineryFrame(f)
+        || (fn !== null && SIGNATURE_ONLY_FRAME_RE.test(fn));
+}
+
+function skipSignatureExcludedFrames(frames: SymFrame[]): SymFrame[] {
     let i = 0;
-    while (i < frames.length && isCrashMachineryFrame(frames[i])) {
+    while (i < frames.length && isSignatureExcludedFrame(frames[i])) {
         i++;
     }
 
@@ -267,10 +288,10 @@ export async function computeSignature(
     const appFrames = hints.length > 0
         ? thread.frames.filter((f) => isAppFrame(f, hints))
         : [];
-    const withoutSentinels = skipSentinelFrames(
+    const withoutSentinels = skipSignatureExcludedFrames(
         appFrames.length > 0 ? appFrames : thread.frames,
     );
-    const chosen = skipSentinelFrames(
+    const chosen = skipSignatureExcludedFrames(
         applyAnchoredSignatureRule(withoutSentinels),
     ).slice(0, topN);
 

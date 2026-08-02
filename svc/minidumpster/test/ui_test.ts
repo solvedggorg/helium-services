@@ -110,12 +110,28 @@ Deno.test('stackHtml folds consecutive crash machinery frames', () => {
                     function:
                         'absl::cleanup_internal::Storage<Callback>::InvokeCallback()',
                 },
+                {
+                    function:
+                        'base::allocator::UnretainedDanglingRawPtrDetectedCrash(unsigned long)',
+                },
+                {
+                    function:
+                        'base::internal::RawPtrBackupRefImpl<1>::ReportIfDangling(content::WebContents*)',
+                },
+                {
+                    function:
+                        'base::internal::UnretainedWrapper<content::WebContents>::get() const',
+                },
+                {
+                    function:
+                        'base::internal::Invoker<...>::RunOnce(base::internal::BindStateBase*)',
+                },
                 { function: 'content::ActualCrashOrigin()' },
             ],
         }],
     }, false);
 
-    assert(html.includes('3 crash machinery frames'));
+    assert(html.includes('7 folded frames'));
     assert(html.includes('data-stack-fold-row="stack-fold-0-0" hidden'));
     assert(html.includes('base::ImmediateCrash()'));
     assert(html.includes('content::ActualCrashOrigin()'));
@@ -137,7 +153,7 @@ Deno.test('stackHtml does not fold mid-stack crash machinery frames', () => {
         }],
     }, false);
 
-    assert(!html.includes('crash machinery frames'));
+    assert(!html.includes('folded frames'));
     assert(!html.includes('data-stack-fold-row'));
     assert(html.includes('InvokeCallback()'));
 });

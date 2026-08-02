@@ -19,7 +19,7 @@
     <tr class="stack-fold-summary">
       <td colspan="4">
         <button type="button" class="stack-fold-toggle mono" data-stack-fold-toggle="<%= row.id %>" aria-expanded="false">
-          frames #<%= first %>-#<%= last %> · <%= row.frames.length %> crash machinery frames
+          frames #<%= first %>–#<%= last %> · <%= row.frames.length %> folded frames
         </button>
       </td>
     </tr>

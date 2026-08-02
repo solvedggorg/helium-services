@@ -10,7 +10,7 @@ import type {
 } from './db.ts';
 import {
     crashingThread,
-    isCrashMachineryFrame,
+    isSignatureExcludedFrame,
     type SymbolicatorResponse,
     type SymFrame,
     type SymStacktrace,
@@ -230,7 +230,7 @@ function frameRows(t: SymStacktrace, threadIndex: number) {
     let prefixEnd = 0;
     while (
         prefixEnd < frames.length
-        && isCrashMachineryFrame(t.frames[prefixEnd])
+        && isSignatureExcludedFrame(t.frames[prefixEnd])
     ) {
         prefixEnd++;
     }

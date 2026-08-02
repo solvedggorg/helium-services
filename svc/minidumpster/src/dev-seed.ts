@@ -28,7 +28,7 @@ const APPLE_REPORT = new URL(
 
 interface MockReport {
     id: string;
-    group: 'keyboard' | 'renderer' | 'gpu';
+    group: 'keyboard' | 'renderer' | 'gpu' | 'machinery';
     product: string;
     version: string;
     platform: string;
@@ -98,6 +98,16 @@ const REPORTS: MockReport[] = [
         ageMs: 3 * HOUR,
         symbolicated: false,
     },
+    {
+        id: '50000000-0000-4000-8000-000000000001',
+        group: 'machinery',
+        product: 'Helium',
+        version: '0.14.3.1',
+        platform: 'Windows',
+        kind: 'minidump',
+        ageMs: 30 * 60 * 1000,
+        symbolicated: true,
+    },
 ];
 
 const GROUPS = {
@@ -112,6 +122,11 @@ const GROUPS = {
     gpu: {
         signature: 'dev-gpu-process',
         title: 'viz::GpuServiceImpl::InitializeWithHost()',
+    },
+    machinery: {
+        signature: 'dev-crash-machinery-fold',
+        title:
+            'v8::internal::maglev::MaglevPhiRepresentationSelector::PreProcessBasicBlock()',
     },
 };
 
@@ -140,6 +155,31 @@ function responseFor(
             frame.function = 'viz::GpuServiceImpl::InitializeWithHost()';
             frame.package = '/opt/helium/helium';
         }
+    }
+    if (report.group === 'machinery') {
+        response.crash_reason = 'EXCEPTION_BREAKPOINT / mock fatal check';
+        const module = 'C:\\Program Files\\Helium\\chrome.dll';
+        response.stacktraces = [{
+            thread_id: 42,
+            thread_name: 'ThreadPoolForegroundWorker',
+            is_requesting_thread: true,
+            frames: [
+                'base::ImmediateCrash()',
+                'logging::LogMessage::HandleFatal()',
+                'logging::LogMessage::Flush::<lambda_0>::operator()()',
+                'absl::cleanup_internal::Storage<Callback>::InvokeCallback()',
+                'absl::Cleanup<Callback>::~Cleanup()',
+                'logging::LogMessage::Flush()',
+                'logging::LogMessageFatal::~LogMessageFatal()',
+                'v8::internal::maglev::MaglevPhiRepresentationSelector::PreProcessBasicBlock()',
+                'v8::internal::maglev::MaglevCompiler::Compile()',
+            ].map((fn, index) => ({
+                status: 'symbolicated',
+                function: fn,
+                package: module,
+                instruction_addr: `0x${(0x1000 + index * 16).toString(16)}`,
+            })),
+        }];
     }
     if (!report.symbolicated) {
         for (const trace of response.stacktraces ?? []) {
@@ -199,7 +239,9 @@ export async function seedDevData(
             product: report.product,
             version: report.version,
             guid: `DEV-${report.id.slice(0, 8)}`,
-            ptype: report.group === 'renderer' ? 'renderer' : 'browser',
+            ptype: report.group === 'renderer' || report.group === 'machinery'
+                ? 'renderer'
+                : 'browser',
             channel: annotations.channel,
             annotations: JSON.stringify(annotations),
             received_at: receivedAt,

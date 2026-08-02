@@ -3,6 +3,7 @@ import { join } from '@std/path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { Db } from '../src/db.ts';
+import { makeTestEnv } from './helpers.ts';
 
 Deno.test('database migration removes the legacy dump_deleted column', async () => {
     const dir = await Deno.makeTempDir();
@@ -59,5 +60,58 @@ Deno.test('database migration removes the legacy dump_deleted column', async () 
         }
     } finally {
         await Deno.remove(dir, { recursive: true }).catch(() => {});
+    }
+});
+
+Deno.test('groups can be filtered by process type', async () => {
+    const env = await makeTestEnv();
+    try {
+        const addReport = (
+            signature: string,
+            ptype: string,
+            receivedAt: number,
+        ) => {
+            const id = crypto.randomUUID();
+            env.db.insertReport({
+                id,
+                product: 'Helium',
+                version: '1.0',
+                guid: null,
+                ptype,
+                channel: null,
+                annotations: '{}',
+                received_at: receivedAt,
+            });
+            const groupId = env.db.upsertGroup(
+                signature,
+                `${ptype} crash`,
+                receivedAt,
+            );
+            env.db.markProcessed(
+                id,
+                groupId,
+                'Linux',
+                receivedAt,
+                true,
+                1,
+            );
+            env.db.recountGroups([groupId]);
+            return groupId;
+        };
+
+        const browserGroup = addReport('browser-signature', 'browser', 1);
+        const rendererGroup = addReport('renderer-signature', 'renderer', 2);
+
+        assertEquals(
+            env.db.listGroups({ ptype: 'renderer' }).map((group) => group.id),
+            [rendererGroup],
+        );
+        assertEquals(
+            env.db.listGroups({ ptype: 'browser' }).map((group) => group.id),
+            [browserGroup],
+        );
+        assertEquals(env.db.filterOptions().ptypes, ['browser', 'renderer']);
+    } finally {
+        await env.cleanup();
     }
 });

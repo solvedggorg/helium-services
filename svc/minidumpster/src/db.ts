@@ -43,6 +43,7 @@ export interface GroupFilter {
     product?: string;
     version?: string;
     platform?: string;
+    ptype?: string;
     sort?: 'count' | 'last_seen';
 }
 
@@ -607,6 +608,17 @@ export class Db {
             );
             params.push(filter.platform);
         }
+        if (filter.ptype) {
+            conds.push(
+                `EXISTS (
+                     SELECT 1
+                     FROM reports r
+                     WHERE r.group_id = g.id
+                       AND r.ptype = ?
+                 )`,
+            );
+            params.push(filter.ptype);
+        }
 
         const where = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
         const order = filter.sort === 'last_seen'
@@ -689,6 +701,7 @@ export class Db {
         products: string[];
         versions: string[];
         platforms: string[];
+        ptypes: string[];
     } {
         const col = (sql: string): string[] =>
             this.many<{ v: string }>(sql).map((r) => r.v);
@@ -711,6 +724,13 @@ export class Db {
                 `SELECT DISTINCT platform AS v
                  FROM reports
                  WHERE platform IS NOT NULL
+                 ORDER BY v
+                 LIMIT 20`,
+            ),
+            ptypes: col(
+                `SELECT DISTINCT ptype AS v
+                 FROM reports
+                 WHERE ptype IS NOT NULL
                  ORDER BY v
                  LIMIT 20`,
             ),

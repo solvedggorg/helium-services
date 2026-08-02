@@ -136,11 +136,17 @@ function csv(joined: string | null): string[] {
 interface GroupsPageData {
     groups: GroupListRow[];
     stats: { day: string; n: number }[];
-    options: { products: string[]; versions: string[]; platforms: string[] };
+    options: {
+        products: string[];
+        versions: string[];
+        platforms: string[];
+        ptypes: string[];
+    };
     filter: {
         product?: string;
         version?: string;
         platform?: string;
+        ptype?: string;
         sort?: string;
     };
 }

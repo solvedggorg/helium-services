@@ -81,6 +81,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             product: c.req.query('product'),
             version: c.req.query('version'),
             platform: c.req.query('platform'),
+            ptype: c.req.query('ptype'),
             sort: c.req.query('sort') === 'last_seen' ? 'last_seen' : 'count',
         };
 

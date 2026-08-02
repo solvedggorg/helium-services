@@ -19,6 +19,7 @@
   <%~ include('select', { name: 'product', values: it.options.products, selected: it.filter.product }) %>
   <%~ include('select', { name: 'version', values: it.options.versions, selected: it.filter.version }) %>
   <%~ include('select', { name: 'platform', values: it.options.platforms, selected: it.filter.platform }) %>
+  <%~ include('select', { name: 'ptype', values: it.options.ptypes, selected: it.filter.ptype }) %>
   <input type="hidden" name="sort" value="<%= it.sort %>">
   <button type="submit">Filter</button>
 </form>

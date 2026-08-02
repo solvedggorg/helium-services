@@ -744,12 +744,25 @@ Deno.test('search finds reports by id, guid, and function name', async () => {
         assertEquals(none.status, 200);
         assert((await none.text()).includes('No groups or reports match'));
 
-        // Too-short queries are rejected.
+        // Short queries are allowed.
         const short = await app.request('/search?q=ab', {
             headers: { cookie },
         });
-        assertEquals(short.status, 400);
-        await short.body?.cancel();
+        assertEquals(short.status, 200);
+        assert((await short.text()).includes('No groups or reports match'));
+
+        const shortFunction = await app.request('/search?q=Run', {
+            headers: { cookie },
+        });
+        assertEquals(shortFunction.status, 302);
+        assertEquals(shortFunction.headers.get('location'), `/reports/${id}`);
+
+        // An empty query is not a search.
+        const empty = await app.request('/search?q=', {
+            headers: { cookie },
+        });
+        assertEquals(empty.status, 400);
+        await empty.body?.cancel();
     } finally {
         await env.cleanup();
     }

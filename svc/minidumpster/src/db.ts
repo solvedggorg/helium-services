@@ -257,10 +257,6 @@ export class Db {
 
     searchReports(query: string, limit = 25): ReportRow[] {
         const q = query.trim().toLowerCase();
-        if (q.length < 4) {
-            return [];
-        }
-
         const direct = this.many<ReportRow>(
             `SELECT *
              FROM reports

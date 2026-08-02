@@ -100,11 +100,11 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     app.get('/search', (c) => {
         const q = (c.req.query('q') ?? '').trim();
         const login = c.get('session').login;
-        if (q.length < 4) {
+        if (!q) {
             return c.html(
                 ui.messagePage(
                     'Search',
-                    'Enter at least 4 characters of a report id, guid, or function name.',
+                    'Enter a report id, guid, or function name.',
                     login,
                 ),
                 400,

@@ -43,6 +43,7 @@ export interface GroupFilter {
     product?: string;
     version?: string;
     platform?: string;
+    ptype?: string;
     sort?: 'count' | 'last_seen';
 }
 
@@ -74,6 +75,13 @@ export interface ArtifactIngestRow {
 
 type SqlParam = string | number | bigint | null | Uint8Array;
 
+function functionSearchQuery(query: string): string | null {
+    const terms = query.match(/\w+/g);
+    return terms?.map((term) => `"${term}"*`).join(' AND ') || null;
+}
+
+const SCHEMA_VERSION = 2;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS reports (
   id TEXT PRIMARY KEY,
@@ -102,11 +110,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS report_search USING fts5(
   report_id UNINDEXED,
   functions
 );
-CREATE TRIGGER IF NOT EXISTS reports_search_delete
-AFTER DELETE ON reports
-BEGIN
-  DELETE FROM report_search WHERE report_id = old.id;
-END;
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   signature TEXT UNIQUE NOT NULL,
@@ -130,21 +133,53 @@ CREATE TABLE IF NOT EXISTS artifact_ingests (
 `;
 
 function migrateSchema(db: DatabaseSync): void {
-    // Replaced by idx_reports_queue in databases created before it.
-    db.exec('DROP INDEX IF EXISTS idx_reports_status');
-
-    const legacyColumn = db.prepare(`
-        SELECT 1
-        FROM pragma_table_info('reports')
-        WHERE name = 'dump_deleted'
-        LIMIT 1
-    `).get();
-
-    if (!legacyColumn) {
+    const current = Number(
+        (db.prepare('PRAGMA user_version').get() as { user_version: number })
+            .user_version,
+    );
+    if (current > SCHEMA_VERSION) {
+        throw new Error(
+            `database schema version ${current} is newer than supported version ${SCHEMA_VERSION}`,
+        );
+    }
+    if (current === SCHEMA_VERSION) {
         return;
     }
 
-    db.exec('ALTER TABLE reports DROP COLUMN dump_deleted');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+        if (current < 1) {
+            // Replaced by idx_reports_queue in databases created before it.
+            db.exec('DROP INDEX IF EXISTS idx_reports_status');
+
+            const legacyColumn = db.prepare(`
+                SELECT 1
+                FROM pragma_table_info('reports')
+                WHERE name = 'dump_deleted'
+                LIMIT 1
+            `).get();
+            if (legacyColumn) {
+                db.exec('ALTER TABLE reports DROP COLUMN dump_deleted');
+            }
+            db.exec('PRAGMA user_version = 1');
+        }
+
+        if (current < 2) {
+            db.exec(`
+                DROP TRIGGER IF EXISTS reports_search_delete;
+                CREATE TRIGGER reports_search_delete
+                AFTER DELETE ON reports
+                BEGIN
+                  DELETE FROM report_search WHERE rowid = old.rowid;
+                END;
+            `);
+            db.exec('PRAGMA user_version = 2');
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+    }
 }
 
 export class Db {
@@ -222,10 +257,6 @@ export class Db {
 
     searchReports(query: string, limit = 25): ReportRow[] {
         const q = query.trim().toLowerCase();
-        if (q.length < 4) {
-            return [];
-        }
-
         const direct = this.many<ReportRow>(
             `SELECT *
              FROM reports
@@ -242,12 +273,11 @@ export class Db {
             limit,
         );
 
-        const terms = q.match(/[\p{L}\p{N}_]+/gu);
-        if (!terms || direct.length >= limit) {
+        const ftsQuery = functionSearchQuery(q);
+        if (!ftsQuery || direct.length >= limit) {
             return direct;
         }
 
-        const ftsQuery = terms.map((term) => `"${term}"*`).join(' AND ');
         const fullText = this.many<ReportRow>(
             `SELECT reports.*
              FROM report_search
@@ -266,31 +296,54 @@ export class Db {
         ).slice(0, limit);
     }
 
-    indexReportFunctions(reportId: string, functions: string): void {
-        this.inWriteTransaction(() => {
-            this.db.prepare(
-                `DELETE FROM report_search
-                 WHERE report_id = ?`,
-            ).run(reportId);
-            this.db.prepare(
-                `INSERT INTO report_search (report_id, functions)
-                 VALUES (?, ?)`,
-            ).run(reportId, functions);
-        });
+    searchGroups(query: string, limit = 25): GroupRow[] {
+        const q = query.trim().toLowerCase();
+        const ftsQuery = functionSearchQuery(q);
+        if (!ftsQuery) {
+            return [];
+        }
+
+        return this.many<GroupRow>(
+            `SELECT *
+             FROM groups
+             WHERE instr(lower(title), ?) > 0
+                OR lower(signature) LIKE ?
+                OR id IN (
+                    SELECT reports.group_id
+                    FROM report_search
+                    JOIN reports
+                      ON reports.id = report_search.report_id
+                    WHERE report_search MATCH ?
+                      AND reports.status = 'processed'
+                      AND reports.group_id IS NOT NULL
+                )
+             ORDER BY report_count DESC, last_seen DESC
+             LIMIT ?`,
+            q,
+            `${q}%`,
+            ftsQuery,
+            limit,
+        );
     }
 
-    reportsMissingSearchIndex(): string[] {
-        return this.many<{ id: string }>(
-            `SELECT reports.id
-             FROM reports
-             WHERE reports.status = 'processed'
-               AND NOT EXISTS (
-                   SELECT 1
-                   FROM report_search
-                   WHERE report_search.report_id = reports.id
-               )
-             ORDER BY reports.received_at`,
-        ).map((report) => report.id);
+    indexReportFunctions(reportId: string, functions: string): void {
+        this.inWriteTransaction(() => {
+            const report = this.one<{ rowId: number }>(
+                `SELECT rowid AS rowId FROM reports WHERE id = ?`,
+                reportId,
+            );
+            if (!report) {
+                throw new Error(`cannot index missing report ${reportId}`);
+            }
+            this.db.prepare(
+                `DELETE FROM report_search
+                 WHERE rowid = ?`,
+            ).run(report.rowId);
+            this.db.prepare(
+                `INSERT INTO report_search (rowid, report_id, functions)
+                 VALUES (?, ?, ?)`,
+            ).run(report.rowId, reportId, functions);
+        });
     }
 
     claimNext(now: number): ReportRow | null {
@@ -607,6 +660,17 @@ export class Db {
             );
             params.push(filter.platform);
         }
+        if (filter.ptype) {
+            conds.push(
+                `EXISTS (
+                     SELECT 1
+                     FROM reports r
+                     WHERE r.group_id = g.id
+                       AND r.ptype = ?
+                 )`,
+            );
+            params.push(filter.ptype);
+        }
 
         const where = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
         const order = filter.sort === 'last_seen'
@@ -689,6 +753,7 @@ export class Db {
         products: string[];
         versions: string[];
         platforms: string[];
+        ptypes: string[];
     } {
         const col = (sql: string): string[] =>
             this.many<{ v: string }>(sql).map((r) => r.v);
@@ -711,6 +776,13 @@ export class Db {
                 `SELECT DISTINCT platform AS v
                  FROM reports
                  WHERE platform IS NOT NULL
+                 ORDER BY v
+                 LIMIT 20`,
+            ),
+            ptypes: col(
+                `SELECT DISTINCT ptype AS v
+                 FROM reports
+                 WHERE ptype IS NOT NULL
                  ORDER BY v
                  LIMIT 20`,
             ),

@@ -1,6 +1,11 @@
 import { assert, assertEquals } from '@std/assert';
 
-import { collapseCppName, groupsPage, symbolsPage } from '../src/ui.ts';
+import {
+    collapseCppName,
+    groupsPage,
+    stackHtml,
+    symbolsPage,
+} from '../src/ui.ts';
 
 const MONSTER =
     'base::internal::Invoker<base::internal::FunctorTraits<base::IgnoreArgs<tabs::TabInterface*, , void>(base::RepeatingCallback<void ()>)::{lambda(base::RepeatingCallback<void ()> const, tabs::TabInterface*)#1}&, base::RepeatingCallback<void ()> const&>, base::internal::BindState<false, false, false, base::IgnoreArgs<tabs::TabInterface*, , void>(base::RepeatingCallback<void ()>)::{lambda(base::RepeatingCallback<void ()>, tabs::TabInterface*)#1}, base::RepeatingCallback<void ()> >, void (tabs::TabInterface*)>::Run(base::internal::BindStateBase*, tabs::TabInterface*)';
@@ -71,6 +76,7 @@ Deno.test('groupsPage renders populated rows', () => {
             products: ['Helium'],
             versions: ['0.14.3.1'],
             platforms: ['macOS'],
+            ptypes: ['browser'],
         },
         filter: { product: 'Helium' },
     }, 'jj');
@@ -89,6 +95,67 @@ Deno.test('groupsPage renders populated rows', () => {
             '<a class="brand" href="/" aria-label="minidumpster"><img src="/static/favicon.svg" alt=""></a>',
         ),
     );
+});
+
+Deno.test('stackHtml folds consecutive crash machinery frames', () => {
+    const html = stackHtml({
+        status: 'completed',
+        stacktraces: [{
+            thread_id: 7,
+            is_requesting_thread: true,
+            frames: [
+                { function: 'base::ImmediateCrash()' },
+                { function: 'logging::LogMessage::HandleFatal()' },
+                {
+                    function:
+                        'absl::cleanup_internal::Storage<Callback>::InvokeCallback()',
+                },
+                {
+                    function:
+                        'base::allocator::UnretainedDanglingRawPtrDetectedCrash(unsigned long)',
+                },
+                {
+                    function:
+                        'base::internal::RawPtrBackupRefImpl<1>::ReportIfDangling(content::WebContents*)',
+                },
+                {
+                    function:
+                        'base::internal::UnretainedWrapper<content::WebContents>::get() const',
+                },
+                {
+                    function:
+                        'base::internal::Invoker<...>::RunOnce(base::internal::BindStateBase*)',
+                },
+                { function: 'content::ActualCrashOrigin()' },
+            ],
+        }],
+    }, false);
+
+    assert(html.includes('7 folded frames'));
+    assert(html.includes('data-stack-fold-row="stack-fold-0-0" hidden'));
+    assert(html.includes('base::ImmediateCrash()'));
+    assert(html.includes('content::ActualCrashOrigin()'));
+});
+
+Deno.test('stackHtml does not fold mid-stack crash machinery frames', () => {
+    const html = stackHtml({
+        status: 'completed',
+        stacktraces: [{
+            thread_id: 7,
+            is_requesting_thread: true,
+            frames: [
+                { function: 'content::Caller()' },
+                { function: 'operator()' },
+                { function: 'InvokeCallback()' },
+                { function: '~Cleanup()' },
+                { function: 'content::Callee()' },
+            ],
+        }],
+    }, false);
+
+    assert(!html.includes('folded frames'));
+    assert(!html.includes('data-stack-fold-row'));
+    assert(html.includes('InvokeCallback()'));
 });
 
 Deno.test('symbolsPage renders release and installed bundle state', () => {

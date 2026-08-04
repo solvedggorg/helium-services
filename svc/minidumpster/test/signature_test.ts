@@ -291,7 +291,47 @@ Deno.test('generic logging lambdas do not group unrelated fatal crashes', async 
                 'base::allocator::UnretainedDanglingRawPtrDetectedCrash(unsigned long)',
                 helium,
             ],
-            ['ReportIfDangling<content::WebContents>', helium],
+            [
+                'base::internal::RawPtrBackupRefImpl<1>::ReportIfDangling(network::cors::CorsURLLoader*)',
+                helium,
+            ],
+            [
+                'base::raw_ptr<network::cors::CorsURLLoader,1>::ReportIfDangling() const',
+                helium,
+            ],
+            [
+                'base::internal::UnretainedWrapper<network::cors::CorsURLLoader,base::unretained_traits::MayNotDangle,0>::GetInternal(base::raw_ptr<network::cors::CorsURLLoader,1> const&)',
+                helium,
+            ],
+            [
+                'base::internal::UnretainedWrapper<network::cors::CorsURLLoader,base::unretained_traits::MayNotDangle,0>::get() const',
+                helium,
+            ],
+            [
+                'base::BindUnwrapTraits<base::internal::UnretainedWrapper<network::cors::CorsURLLoader>>::Unwrap(base::internal::UnretainedWrapper<network::cors::CorsURLLoader> const&)',
+                helium,
+            ],
+            [
+                'base::internal::Unwrap(base::internal::UnretainedWrapper<network::cors::CorsURLLoader>&&)',
+                helium,
+            ],
+            [
+                'base::internal::InvokeHelper<0,base::internal::FunctorTraits<void ()>>::MakeItSo(void (*)())',
+                helium,
+            ],
+            [
+                'base::internal::Invoker<...>::RunImpl(void (*)())',
+                helium,
+            ],
+            [
+                'base::internal::Invoker<...>::RunOnce(base::internal::BindStateBase*) [clone .cfi]',
+                helium,
+            ],
+            ['base::OnceCallback<void ()>::Run()', helium],
+            [
+                'Bangs::BangManager::OnSimpleLoaderComplete(std::__Cr::optional<...>)',
+                helium,
+            ],
         ]),
         { topN: 5, appHints: ['helium'] },
     );
@@ -310,7 +350,7 @@ Deno.test('generic logging lambdas do not group unrelated fatal crashes', async 
     assert(dangling && closeFailure);
     assertEquals(
         dangling.title,
-        'base::allocator::UnretainedDanglingRawPtrDetectedCrash(unsigned long)',
+        'Bangs::BangManager::OnSimpleLoaderComplete(std::__Cr::optional<...>)',
     );
     assertEquals(closeFailure.title, 'Free');
     assertNotEquals(dangling.signature, closeFailure.signature);

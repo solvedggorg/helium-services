@@ -14,19 +14,21 @@
     <tr><th>#</th><th>Function</th><th>File</th><th>Module</th></tr>
   </thead>
   <tbody>
-    <% t.frames.forEach((frame, i) => { %>
-    <tr>
-      <td class="idx mono"><%= i %></td>
-      <td class="mono">
-        <% if (frame.fn) { %>
-        <%~ include('cpp-name', { name: frame.fn, collapseCppName: it.collapseCppName }) %>
-        <% } else { %>
-        <span class="muted"><%= frame.addr %></span>
-        <% } %>
+    <% t.rows.forEach((row) => { %>
+    <% if (row.kind === 'fold') { const first = row.frames[0].index; const last = row.frames[row.frames.length - 1].index; %>
+    <tr class="stack-fold-summary">
+      <td colspan="4">
+        <button type="button" class="stack-fold-toggle mono" data-stack-fold-toggle="<%= row.id %>" aria-expanded="false">
+          frames #<%= first %>–#<%= last %> · <%= row.frames.length %> folded frames
+        </button>
       </td>
-      <td class="mono muted"><%= frame.loc %></td>
-      <td class="muted"><%= frame.mod %></td>
     </tr>
+    <% row.frames.forEach((frame) => { %>
+    <%~ include('frame-row', { frame, foldId: row.id, collapseCppName: it.collapseCppName }) %>
+    <% }) %>
+    <% } else { %>
+    <%~ include('frame-row', { frame: row.frame, foldId: null, collapseCppName: it.collapseCppName }) %>
+    <% } %>
     <% }) %>
   </tbody>
 </table>

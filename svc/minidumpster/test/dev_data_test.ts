@@ -11,11 +11,12 @@ Deno.test('dev data seeds realistic reports idempotently', async () => {
         const first = await seedDevData(env.db, env.config, now);
         const second = await seedDevData(env.db, env.config, now);
 
-        assertEquals(first, { reportsCreated: 7, reportsTotal: 7 });
-        assertEquals(second, { reportsCreated: 0, reportsTotal: 7 });
+        assertEquals(first, { reportsCreated: 8, reportsTotal: 8 });
+        assertEquals(second, { reportsCreated: 0, reportsTotal: 8 });
         assertEquals(env.db.listGroups().map((group) => group.report_count), [
             3,
             2,
+            1,
             1,
         ]);
 
@@ -31,6 +32,11 @@ Deno.test('dev data seeds realistic reports idempotently', async () => {
             '30000000-0000-4000-8000-000000000001',
         )!;
         assertEquals(unsymbolicated.symbolicated, 0);
+
+        const machinery = env.db.getReport(
+            '50000000-0000-4000-8000-000000000001',
+        )!;
+        assertEquals(machinery.ptype, 'renderer');
 
         const pending = env.db.getReport(
             '40000000-0000-4000-8000-000000000001',

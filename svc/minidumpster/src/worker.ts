@@ -73,7 +73,8 @@ export async function processReport(
             JSON.stringify(resp),
         );
 
-        const hints = report.product ? [report.product] : [];
+        const productHint = report.product?.replace(/_Mac$/i, '');
+        const hints = ['chrome', ...(productHint ? [productHint] : [])];
         const sig = (await computeSignature(resp, {
             topN: config.signatureFrames,
             appHints: hints,
@@ -81,6 +82,7 @@ export async function processReport(
             ?? (await fallbackSignature(resp));
         const now = Date.now();
         const platform = platformFromResponse(resp);
+        indexReportResponse(db, report.id, resp);
         const groupId = db.upsertGroup(sig.signature, sig.title, now);
         db.markProcessed(
             report.id,
@@ -91,13 +93,6 @@ export async function processReport(
             attempts,
         );
         db.recountGroups([report.group_id, groupId]);
-        try {
-            indexReportResponse(db, report.id, resp);
-        } catch (err) {
-            logError('report_search_index_error', err, {
-                report_id: report.id,
-            });
-        }
 
         logEvent('report_processed', {
             report_id: report.id,

@@ -81,6 +81,7 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
             product: c.req.query('product'),
             version: c.req.query('version'),
             platform: c.req.query('platform'),
+            ptype: c.req.query('ptype'),
             sort: c.req.query('sort') === 'last_seen' ? 'last_seen' : 'count',
         };
 
@@ -99,23 +100,27 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
     app.get('/search', (c) => {
         const q = (c.req.query('q') ?? '').trim();
         const login = c.get('session').login;
-        if (q.length < 4) {
+        if (!q) {
             return c.html(
                 ui.messagePage(
                     'Search',
-                    'Enter at least 4 characters of a report id, guid, or function name.',
+                    'Enter a report id, guid, or function name.',
                     login,
                 ),
                 400,
             );
         }
 
-        const results = db.searchReports(q);
-        if (results.length === 1) {
-            return c.redirect(`/reports/${results[0].id}`);
+        const reports = db.searchReports(q);
+        const groups = db.searchGroups(q);
+        if (reports.length === 1) {
+            return c.redirect(`/reports/${reports[0].id}`);
+        }
+        if (groups.length === 1) {
+            return c.redirect(`/groups/${groups[0].id}`);
         }
 
-        return c.html(ui.searchPage(q, results, login));
+        return c.html(ui.searchPage(q, { groups, reports }, login));
     });
 
     app.get('/upload', (c) => c.html(ui.uploadPage(c.get('session').login)));
@@ -317,7 +322,6 @@ export function webRoutes(deps: AppDeps): Hono<Env> {
                         report,
                         group,
                         resp,
-                        config.publicBaseUrl,
                     );
                 }
             }

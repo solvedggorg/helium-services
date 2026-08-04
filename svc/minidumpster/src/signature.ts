@@ -143,8 +143,8 @@ const SENTINEL_FRAME_RE = new RegExp(
         '^crash_reporter::DumpWithoutCrashing',
         '^logging::',
         '^operator\\(\\)$',
-        '^InvokeCallback$',
-        '^~Cleanup$',
+        '^(?:absl::cleanup_internal::Storage<.*>::)?InvokeCallback(?:\\(|$)',
+        '^(?:absl::Cleanup<.*>::)?~Cleanup(?:\\(|$)',
         '^~ErrnoLogMessage$',
         'CheckFailure',
         'CheckError',
@@ -158,21 +158,42 @@ const SENTINEL_FRAME_RE = new RegExp(
         '^partition_alloc::internal::PartitionExcessiveAllocationSize',
         '^partition_alloc::TerminateBecauseOutOfMemory',
         '^base::internal::OnNoMemory',
+        '^base::allocator::UnretainedDanglingRawPtrDetectedCrash',
         '^__fastfail',
         '^RtlFailFast',
         'CrashForException',
     ].join('|'),
 );
 
-function isSentinelFrame(f: SymFrame): boolean {
+export function isCrashMachineryFrame(f: SymFrame): boolean {
     const fn = frameFunction(f);
 
     return fn !== null && SENTINEL_FRAME_RE.test(fn);
 }
 
-function skipSentinelFrames(frames: SymFrame[]): SymFrame[] {
+const SIGNATURE_ONLY_FRAME_RE = new RegExp(
+    [
+        '^base::internal::RawPtrBackupRefImpl<.*>::ReportIfDangling\\(',
+        '^base::raw_ptr<.*>::ReportIfDangling\\(',
+        '^base::internal::UnretainedWrapper<.*>::(?:GetInternal|get)\\(',
+        '^base::BindUnwrapTraits<.*>::Unwrap\\(',
+        '^base::internal::Unwrap(?:<.*>)?\\(',
+        '^base::internal::InvokeHelper<.*>::MakeItSo\\(',
+        '^base::internal::Invoker<.*>::Run(?:Impl|Once)?\\(',
+        '^base::OnceCallback<.*>::Run\\(',
+    ].join('|'),
+);
+
+export function isSignatureExcludedFrame(f: SymFrame): boolean {
+    const fn = frameFunction(f);
+
+    return isCrashMachineryFrame(f)
+        || (fn !== null && SIGNATURE_ONLY_FRAME_RE.test(fn));
+}
+
+function skipSignatureExcludedFrames(frames: SymFrame[]): SymFrame[] {
     let i = 0;
-    while (i < frames.length && isSentinelFrame(frames[i])) {
+    while (i < frames.length && isSignatureExcludedFrame(frames[i])) {
         i++;
     }
 
@@ -209,6 +230,11 @@ const ANCHORED_SIGNATURE_RULES: AnchoredSignatureRule[] = [
         trigger: /HandleCheckErrorLogMessage(?:\(|$)/,
         triggerDepth: 8,
         anchor: /HandleCheckErrorLogMessage(?:\(|$)/,
+    },
+    {
+        trigger: /^absl::ThrowStd[A-Za-z]+(?:\(|$)/,
+        triggerDepth: 16,
+        anchor: /^absl::ThrowStd[A-Za-z]+(?:\(|$)/,
     },
 ];
 
@@ -262,10 +288,10 @@ export async function computeSignature(
     const appFrames = hints.length > 0
         ? thread.frames.filter((f) => isAppFrame(f, hints))
         : [];
-    const withoutSentinels = skipSentinelFrames(
+    const withoutSentinels = skipSignatureExcludedFrames(
         appFrames.length > 0 ? appFrames : thread.frames,
     );
-    const chosen = skipSentinelFrames(
+    const chosen = skipSignatureExcludedFrames(
         applyAnchoredSignatureRule(withoutSentinels),
     ).slice(0, topN);
 

@@ -3,7 +3,6 @@ import * as ArtifactCrawler from './artifact-crawler.ts';
 import * as Config from './config.ts';
 import * as Log from './log.ts';
 import * as Paths from './paths.ts';
-import * as ReportSearch from './report-search.ts';
 import * as Retention from './retention.ts';
 import * as Worker from './worker.ts';
 import { Db } from './db.ts';
@@ -19,7 +18,6 @@ if (import.meta.main) {
 
     await Paths.ensureDataDirs(config.dataDir);
     const db = new Db(Paths.dbPath(config.dataDir));
-    await ReportSearch.backfillReportSearch(db, config.dataDir);
     const app = App.buildApp({ config, db });
 
     const stopRetention = Retention.startRetentionJob(db, config);

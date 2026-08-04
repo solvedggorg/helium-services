@@ -62,7 +62,6 @@ export function githubIssueUrl(
     report: ReportRow,
     group: GroupRow | null,
     response: SymbolicatorResponse,
-    publicBaseUrl: string,
 ): string {
     const title = oneLine(
         group?.title ?? response.crash_reason ?? 'Helium crash',

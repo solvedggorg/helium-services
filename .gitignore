@@ -3,6 +3,12 @@ private
 
 # environment variables
 .env
+.dev.vars
+
+# Cloudflare Workers
+node_modules/
+.wrangler/
+!.dev.vars.example
 
 # ansible hosts file
 deploy/hosts.yml

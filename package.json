@@ -1,0 +1,20 @@
+{
+  "name": "helium-services",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "SSL_CERT_FILE=${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt} wrangler dev",
+    "sync-bangs": "cp svc/bangs/bangs.json public/bangs.json",
+    "deploy": "npm run sync-bangs && wrangler deploy",
+    "types": "wrangler types",
+    "check": "wrangler types --check && tsc --noEmit",
+    "dry-run": "wrangler deploy --dry-run --outdir=.wrangler/dist"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "wrangler": "^4.120.0"
+  },
+  "dependencies": {
+    "@types/node": "^26.2.0"
+  }
+}

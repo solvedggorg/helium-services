@@ -1,0 +1,50 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "helium-services",
+  "account_id": "97b0dab10c55d2e8a6c952eb4e4914ac",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "services1.iresolvedllc.com",
+      "custom_domain": true,
+    },
+  ],
+  "vars": {
+    "SERVICES_HOSTNAME": "services1.iresolvedllc.com",
+    "PROXY_BASE_URL": "https://services1.iresolvedllc.com/ext",
+    "UBO_PROXY_BASE_URL": "https://services1.iresolvedllc.com/ubo/",
+    "UBO_USE_ORIGINAL_UBLOCK_ASSETS": "0",
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "c2182cdd3c8f4c2a8dc7470028685cde",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "DICTS",
+      "bucket_name": "helium-services-dicts",
+    },
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "html_handling": "none",
+    "not_found_handling": "none",
+    "run_worker_first": true,
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 },
+  },
+  "cache": {
+    "enabled": true,
+    "cross_version_cache": true,
+  },
+}

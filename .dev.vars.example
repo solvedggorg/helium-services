@@ -1,0 +1,3 @@
+# Copy to .dev.vars for `wrangler dev`.
+# HMAC_SECRET must be at least 32 characters. CRX proxying is disabled without it.
+HMAC_SECRET=dev-only-hmac-secret-change-me-32b
